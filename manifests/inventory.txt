@@ -1,0 +1,129 @@
+===== DISK =====
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/md126p2    835G  532G  261G  68% /
+
+===== TOP-LEVEL SIZE =====
+12M	/home/lihourun/hsc/NSR-work/NSR-main
+286M	/home/lihourun/hsc/NSR-work/data
+15G	/home/lihourun/hsc/NSR-work/models/Qwen2.5-Math-7B
+8.4G	/home/lihourun/miniconda3/envs/nsr
+
+===== CODE FILES =====
+/home/lihourun/hsc/NSR-work/NSR-main/assets/readme/clip_frac.png
+/home/lihourun/hsc/NSR-work/NSR-main/assets/readme/overview.png
+/home/lihourun/hsc/NSR-work/NSR-main/assets/readme/table1.png
+/home/lihourun/hsc/NSR-work/NSR-main/assets/readme/training_dynamic.png
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/dataset.py
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/launch.py
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/launch.py.before-32gpu-20260916-214655
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/launch.py.before-cumem-fix-20260909-230005
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/protocol.py
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/protocol.py.before-32gpu-20260916-214655
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/protocol.py.before-final-only-20260914-154743
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/protocol.py.before-memsafe-20260908-224307
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/README.md
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/report.py
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/test_protocol.py
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/test_protocol.py.before-final-only-20260914-154743
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/test_watcher.py
+/home/lihourun/hsc/NSR-work/NSR-main/baseline_4gpu/watch_and_launch.py
+/home/lihourun/hsc/NSR-work/NSR-main/nohup.out
+/home/lihourun/hsc/NSR-work/NSR-main/README.md
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/dapo_ray_trainer.py
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/main_dapo.py
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/main_dapo.py.before_0999.20260903-154921
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/prepare_dapo_data.sh
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/README.md
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/run_dapo_early_qwen2.5_32b.sh
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/run_dapo_qwen2.5_32b.sh
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/run_dapo_wo_ds_qwen2.5_32b.sh
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/dapo/runtime_env.yaml
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/nsr/DAPO_baseline_7b.sh
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/nsr/NSR_delta_0.1_7b.sh
+/home/lihourun/hsc/NSR-work/NSR-main/recipe/nsr/NSR_delta_0.1_8b.sh
+/home/lihourun/hsc/NSR-work/NSR-main/verl/base_config.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/experimental/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/interactions/base.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/interactions/gsm8k_interaction.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/interactions/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/model_merger/base_model_merger.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/model_merger/fsdp_model_merger.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/model_merger/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/model_merger/__main__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/model_merger/megatron_model_merger.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/models/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/models/README.md
+/home/lihourun/hsc/NSR-work/NSR-main/verl/models/registry.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/models/weight_loader_registry.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/protocol.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/single_controller/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/third_party/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/base_tool.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/geo3k_tool.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/gsm8k_tool.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/mcp_base_tool.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/mcp_search_tool.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/sandbox_fusion_tools.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/schemas.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/tools/search_tool.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/trainer/constants_ppo.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/trainer/fsdp_sft_trainer.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/trainer/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/trainer/main_eval.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/trainer/main_generation.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/trainer/main_ppo.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/trainer/runtime_env.yaml
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/activation_offload.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/config.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/device.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/distributed.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/flops_counter.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/fsdp_utils.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/fs.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/hdfs_io.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/import_utils.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/logging_utils.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/megatron_utils.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/memory_buffer.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/model.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/net_utils.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/py_functional.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/ray_utils.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/seqlen_balancing.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/tokenizer.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/torch_dtypes.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/torch_functional.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/tracking.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/ulysses.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/utils/vllm_utils.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/version/version
+/home/lihourun/hsc/NSR-work/NSR-main/verl/workers/fsdp_workers.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/workers/__init__.py
+/home/lihourun/hsc/NSR-work/NSR-main/verl/workers/megatron_workers.py
+/home/lihourun/hsc/NSR-work/NSR-main/wait_and_run_4gpu.sh
+
+===== DATA FILES =====
+total 286M
+-rw-rw-r-- 1 lihourun lihourun  29K Sep  9 12:46 aime-2024.parquet
+-rw-rw-r-- 1 lihourun lihourun 286M Sep  9 13:35 dapo-math-17k.parquet
+
+===== MODEL FILES =====
+config.json 679 bytes
+config.json.official-4096-20260909-120804 678 bytes
+generation_config.json 138 bytes
+.gitattributes 1519 bytes
+LICENSE 11343 bytes
+merges.txt 1671839 bytes
+model-00001-of-00004.safetensors 3945441440 bytes
+model-00002-of-00004.safetensors 3864726352 bytes
+model-00003-of-00004.safetensors 3864726424 bytes
+model-00004-of-00004.safetensors 3556377672 bytes
+model.safetensors.index.json 27752 bytes
+README.md 3421 bytes
+tokenizer_config.json 7318 bytes
+tokenizer.json 7031645 bytes
+vocab.json 2776833 bytes
