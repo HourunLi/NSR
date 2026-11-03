@@ -1,0 +1,78 @@
+Wed Sep 16 09:49:57 PM CST 2026
+Linux zp-nc34 5.15.0-186-generic #196-Ubuntu SMP Sat Jun 20 16:09:34 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.5 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+Wed Sep 16 21:49:57 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.95.05              Driver Version: 580.95.05      CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H20                     Off |   00000000:18:00.0 Off |                    0 |
+| N/A   47C    P0            402W /  500W |   17787MiB /  97871MiB |    100%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H20                     Off |   00000000:38:00.0 Off |                    0 |
+| N/A   74C    P0            406W /  500W |    9327MiB /  97871MiB |     93%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H20                     Off |   00000000:49:00.0 Off |                    0 |
+| N/A   46C    P0            408W /  500W |   39709MiB /  97871MiB |    100%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H20                     Off |   00000000:59:00.0 Off |                    0 |
+| N/A   42C    P0            409W /  500W |   18039MiB /  97871MiB |     97%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   4  NVIDIA H20                     Off |   00000000:9B:00.0 Off |                    0 |
+| N/A   40C    P0            337W /  500W |   24723MiB /  97871MiB |     98%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   5  NVIDIA H20                     Off |   00000000:BB:00.0 Off |                    0 |
+| N/A   45C    P0            338W /  500W |   22019MiB /  97871MiB |     99%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   6  NVIDIA H20                     Off |   00000000:CA:00.0 Off |                    0 |
+| N/A   39C    P0            323W /  500W |   24771MiB /  97871MiB |     99%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   7  NVIDIA H20                     Off |   00000000:DA:00.0 Off |                    0 |
+| N/A   42C    P0            327W /  500W |   22487MiB /  97871MiB |     98%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A          725855      C   ...onda3/envs/pytorch/bin/python       8454MiB |
+|    0   N/A  N/A          728844      C   ...conda3/envs/enzgfm/bin/python       9318MiB |
+|    1   N/A  N/A          730169      C   ...conda3/envs/enzgfm/bin/python       9318MiB |
+|    2   N/A  N/A         1668324      C   ...iconda3/envs/msapf/bin/python      39696MiB |
+|    3   N/A  N/A          696174      C   ...onda3/envs/pytorch/bin/python       8706MiB |
+|    3   N/A  N/A          729201      C   ...conda3/envs/enzgfm/bin/python       9318MiB |
+|    4   N/A  N/A         1873559      C   ...ctor_rollout_compute_log_prob      24594MiB |
+|    5   N/A  N/A         1873857      C   ...ctor_rollout_compute_log_prob      21890MiB |
+|    6   N/A  N/A         1873858      C   ...ctor_rollout_compute_log_prob      24642MiB |
+|    7   N/A  N/A         1873859      C   ...ctor_rollout_compute_log_prob      22358MiB |
++-----------------------------------------------------------------------------------------+
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Aug_20_01:58:59_PM_PDT_2025
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+Python 3.10.21

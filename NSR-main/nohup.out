@@ -1,0 +1,18 @@
+Model: 4 shards, 14.19 GiB, context=32768
+Dataset dapo-math-17k.parquet: 1791700 rows
+Dataset aime-2024.parquet: 960 rows
+AIME: 30 distinct questions x 32 rows x n=1 = 960 samples per evaluation
+Installed versions: {"torch": "2.6.0+cu124", "transformers": "4.51.0", "vllm": "0.8.3", "ray": "2.43.0", "datasets": "3.5.0", "flash-attn": "2.7.4.post1"}
+Hydra configuration: OK
+Existing training processes owned by this account:
+  none
+Selected GPU 2: NVIDIA H20, memory used 50541 MiB
+Selected GPU 3: NVIDIA H20, memory used 4 MiB
+Selected GPU 4: NVIDIA H20, memory used 8629 MiB
+Selected GPU 5: NVIDIA H20, memory used 12263 MiB
+Checkpoint filesystem: 8.8 GiB free; conservative launch budget: 300 GiB
+Runtime filesystem: 8.8 GiB free
+New experiment: /home/lihourun/hsc/NSR-work/paper-runs/DAPO7B-paper4-v2
+Selected GPUs busy: ['2', '4', '5']
+This is one fresh 300-step run. It is NOT three independent replications.
+STOPPED: RuntimeError: Not enough conservative headroom for two complete saved checkpoints; Runtime/cache filesystem needs at least 20 GiB and 6% available; Selected GPUs have existing processes/memory allocations; no processes will be stopped
