@@ -23,7 +23,7 @@ from pathlib import Path
 import json
 
 path = Path(
-    ".../NSR/"
+    "/data/lihourun/NSR/"
     "models/Qwen2.5-Math-7B/config.json"
 )
 
