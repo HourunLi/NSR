@@ -1,20 +1,20 @@
 #环境配置
 conda env create \
   -n nsr \
-  -f ".../NSR/manifests/environment-no-builds.yml"
+  -f "/data/lihourun/NSR/manifests/environment-no-builds.yml"
 
 conda activate nsr
 
 
 #模型下载
-mkdir -p ".../NSR/cache/huggingface"
+mkdir -p "/data/lihourun/NSR/cache/huggingface"
 
-mkdir -p ".../NSR/models/Qwen2.5-Math-7B"
+mkdir -p "/data/lihourun/NSR/models/Qwen2.5-Math-7B"
 
-HF_HOME=".../NSR/cache/huggingface" \
+HF_HOME="/data/lihourun/NSR/cache/huggingface" \
 hf download \
   Qwen/Qwen2.5-Math-7B \
-  --local-dir ".../NSR/models/Qwen2.5-Math-7B"
+  --local-dir "/data/lihourun/NSR/models/Qwen2.5-Math-7B"
 
 
 #修改参数适配当前代码
@@ -47,11 +47,11 @@ PY
 
 
 #提交任务
-cd ".../NSR/NSR-main"
+cd "/data/lihourun/NSR/NSR-main"
 
 unset PYTORCH_CUDA_ALLOC_CONF
 
-NSR_ROOT=".../NSR" \
+NSR_ROOT="/data/lihourun/NSR" \
 RAY_ADDRESS=auto \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 python -u -m baseline_4gpu.launch run \
