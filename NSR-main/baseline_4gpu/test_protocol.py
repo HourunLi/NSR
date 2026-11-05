@@ -200,18 +200,31 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(env["PYTHONNOUSERSITE"], "1")
             self.assertEqual(launch.environment(Path("/data/lihourun/NSR"), repo, "run", 8, 4)["RAY_ADDRESS"], "auto")
 
-    def test_grpc_diagnosis(self):
+    def test_env_diagnosis(self):
         shadow = "/modelarts/tools/visualization/tensorboard"
-        base = {"grpc": shadow + "/grpc/__init__.py", "entry": shadow, "prefix": "/env",
-                "python": "/env/bin/python", "sources": ["/env/lib/python3.11/site-packages/modelarts.pth"]}
-        self.assertEqual(launch.grpc_diagnosis(dict(base, grpcio="1.83.0"), True), [])
-        missing = launch.grpc_diagnosis(dict(base, grpcio=None), False)[0]
-        self.assertIn("/env/bin/python -m pip install grpcio", missing)
+        broken = {"grpc": shadow + "/grpc/__init__.py", "grpc_entry": shadow,
+                  "grpc_sources": ["/env/lib/python3.11/site-packages/modelarts.pth"],
+                  "grpc_error": "ImportError: cannot import name 'cygrpc'", "grpc_in_env": False,
+                  "grpcio": "1.80.0", "grpcio_dir": shadow, "dashboard_full": True, "dashboard_failures": [],
+                  "prefix": "/env", "python": "/env/bin/python"}
+        healthy = dict(broken, grpc="/env/lib/python3.11/site-packages/grpc/__init__.py", grpc_sources=[],
+                       grpc_entry="/env/lib/python3.11/site-packages", grpc_error=None, grpc_in_env=True)
+        self.assertEqual(launch.env_diagnosis(healthy), [])
+        # ModelArts case: the only grpc (and its grpcio metadata) lives outside the env.
+        missing = launch.env_diagnosis(broken)[0]
+        self.assertIn("/env/bin/python -m pip install --ignore-installed --no-deps grpcio", missing)
         self.assertIn("modelarts.pth", missing)
-        shadowed = launch.grpc_diagnosis(dict(base, grpcio="1.83.0"), False)[0]
-        self.assertIn(shadow, shadowed)
-        self.assertIn("modelarts.pth", shadowed)
-        self.assertEqual(len(launch.grpc_diagnosis(None, False)), 1)
+        self.assertIn("not in the env", missing)
+        shadowed = launch.env_diagnosis(dict(broken, grpc_in_env=True))[0]
+        self.assertIn("Remove that entry", shadowed)
+        # Minimal Ray (no dashboard deps) does not need grpc at all.
+        absent = dict(broken, grpc=None, grpc_entry=None, grpc_sources=[], grpcio=None, grpcio_dir=None,
+                      grpc_error="ModuleNotFoundError: No module named 'grpc'")
+        self.assertEqual(launch.env_diagnosis(dict(absent, dashboard_full=False)), [])
+        self.assertIn("pip install", launch.env_diagnosis(absent)[0])
+        failing = dict(healthy, dashboard_failures=["ray.dashboard.modules.x: ImportError: boom"])
+        self.assertIn("ray.dashboard.modules.x", launch.env_diagnosis(failing)[0])
+        self.assertEqual(len(launch.env_diagnosis(None)), 1)
 
     def test_pathfix_drops_listed_entries_only(self):
         import subprocess

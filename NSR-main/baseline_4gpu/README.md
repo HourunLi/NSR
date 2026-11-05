@@ -41,7 +41,13 @@
 
 还会要求运行时所在文件系统至少有20 GiB且至少6%可用，避免继续依赖调高 Ray 满盘阈值。
 
-Ray 和 vLLM 通过 Unix socket 通信，`TMPDIR`/`RAY_TMPDIR` 必须在本地盘。默认放在 `NSR_ROOT` 的上一级（`tp/`、`rp/<hash>/`）；若那里是 FUSE（如 OBS/obsfs、s3fs）或 NFS 等挂载，启动器自动改用 `/tmp/tp`、`/tmp/rp/<hash>`，也可用 `BASELINE_LOCAL_TMP=/本地盘目录` 指定（路径要短，`RAY_TMPDIR` 不超过38个字符）。启动器不把继承的 `PYTHONPATH` 传给训练进程，只放 NSR-main，并设置 `PYTHONNOUSERSITE=1`，避免平台注入的包遮蔽 conda 环境里的同名包、导致 Ray agent 起不来。若环境 site-packages 里的 `*.pth`（例如 ModelArts 的 `modelarts.pth`）把某个目录插到 site-packages 之前并遮蔽已安装的包（如自带的坏 grpc），启动器只在训练进程内通过 `pathfix/sitecustomize.py` 去掉该条目（`BASELINE_DROP_SYS_PATH`，记录在 manifest），不修改环境文件；随后在训练环境里实际 `import grpc` 复核。单机模式下若本账号已有 Ray（`gcs_server`/`raylet`）在运行，启动器拒绝启动，以免 `ray.init()` 连到残留实例。若输出盘另有位置，可设置 `BASELINE_RUNS=/你的可写目录/paper-runs`，但运行时/缓存目录仍需要足够空间。
+Ray 和 vLLM 通过 Unix socket 通信，`TMPDIR`/`RAY_TMPDIR` 必须在本地盘。默认放在 `NSR_ROOT` 的上一级（`tp/`、`rp/<hash>/`）；若那里是 FUSE（如 OBS/obsfs、s3fs）或 NFS 等挂载，启动器自动改用 `/tmp/tp`、`/tmp/rp/<hash>`，也可用 `BASELINE_LOCAL_TMP=/本地盘目录` 指定（路径要短，`RAY_TMPDIR` 不超过38个字符）。启动器不把继承的 `PYTHONPATH` 传给训练进程，只放 NSR-main，并设置 `PYTHONNOUSERSITE=1`，避免平台注入的包遮蔽 conda 环境里的同名包、导致 Ray agent 起不来。若环境 site-packages 里的 `*.pth`（例如 ModelArts 的 `modelarts.pth`）把某个目录插到 site-packages 之前并遮蔽已安装的包（如自带的坏 grpc），启动器只在训练进程内通过 `pathfix/sitecustomize.py` 去掉该条目（`BASELINE_DROP_SYS_PATH`，记录在 manifest），不修改环境文件；随后在训练环境里复核：实际 `import grpc`，并按 Ray dashboard/agent 启动时的方式导入 `ray.dashboard.modules` 下全部模块，任何失败都会让 Ray 节点起不来，因此作为阻断项报告。
+
+ModelArts 镜像的 `modelarts.pth` 会把 `/modelarts/tools/visualization/tensorboard` 加进 `sys.path`，其中自带的 grpc（及 `grpcio` 元数据）是为别的 Python 版本编译的。若 conda 环境本身没有 grpc，`pip install grpcio` 会误认为“已安装”而跳过，需要：
+
+```bash
+python -m pip install --ignore-installed --no-deps grpcio
+```单机模式下若本账号已有 Ray（`gcs_server`/`raylet`）在运行，启动器拒绝启动，以免 `ray.init()` 连到残留实例。若输出盘另有位置，可设置 `BASELINE_RUNS=/你的可写目录/paper-runs`，但运行时/缓存目录仍需要足够空间。
 
 ```bash
 df -h /home/lihourun/hsc/NSR-work

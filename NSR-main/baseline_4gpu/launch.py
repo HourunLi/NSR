@@ -185,7 +185,7 @@ def gpu_status(env, n_gpus):
 PATHFIX_DIR = Path(__file__).resolve().parent / "pathfix"
 
 ENV_PROBE = r"""
-import glob, importlib.metadata, importlib.util, json, os, site, sys
+import glob, importlib, importlib.metadata, importlib.util, json, os, pkgutil, site, sys
 
 def top_level(directory):
     names = set()
@@ -212,13 +212,22 @@ for name in ("sitecustomize", "usercustomize"):
 
 def added_by(entry):
     hits = []
-    for path in startup_files:
+    for path in startup_files if entry else []:
         try:
             if entry.rstrip("/") in open(path, encoding="utf-8", errors="replace").read():
                 hits.append(path)
         except OSError:
             pass
     return hits
+
+def entry_of(origin):
+    if not origin:
+        return None
+    return max((p for p in sys.path if p and origin.startswith(os.path.join(os.path.abspath(p), ""))),
+               key=len, default=None)
+
+def error(exc):
+    return f"{type(exc).__name__}: {exc}"
 
 # Entries placed ahead of the env's site-packages by startup files (not PYTHONPATH, not the stdlib)
 # that contain top-level names also installed in site-packages.
@@ -238,57 +247,102 @@ for entry in sys.path[:min(positions) if positions else len(sys.path)]:
 spec = importlib.util.find_spec("grpc")
 origin = spec.origin if spec else None
 try:
-    version = importlib.metadata.version("grpcio")
+    dist = importlib.metadata.distribution("grpcio")
+    version, dist_dir = dist.version, str(dist.locate_file(""))
 except importlib.metadata.PackageNotFoundError:
-    version = None
-entry = None
-if origin:
-    entry = max((p for p in sys.path if p and origin.startswith(os.path.join(os.path.abspath(p), ""))),
-                key=len, default=None)
-customize = importlib.util.find_spec("sitecustomize")
-print(json.dumps({"grpc": origin, "grpcio": version, "entry": entry, "sources": added_by(entry) if entry else [],
-                  "shadowing": shadowing, "shadow_sources": shadow_sources,
-                  "sitecustomize": customize.origin if customize else None,
-                  "prefix": sys.prefix, "python": sys.executable}), flush=True)
-import grpc
-from grpc._cython import cygrpc
+    version = dist_dir = None
+grpc_entry = entry_of(origin)
+try:
+    import grpc
+    from grpc._cython import cygrpc
+    grpc_error = None
+except Exception as exc:
+    grpc_error = error(exc)
+
+# Replay what Ray's dashboard and per-node agent do at startup (ray.dashboard.utils.get_all_modules):
+# full mode when the optional dashboard deps import; then every module under ray.dashboard.modules is
+# imported, and a failure there kills the agent and with it the raylet.
+failures = []
+try:
+    import ray.dashboard.optional_deps
+    dashboard_full = True
+except ImportError:
+    dashboard_full = False
+except Exception as exc:
+    dashboard_full = True
+    failures.append("ray.dashboard.optional_deps: " + error(exc))
+try:
+    import ray.dashboard.modules as modules
+    for _, name, _ in pkgutil.walk_packages(modules.__path__, modules.__name__ + ".", onerror=lambda name: None):
+        try:
+            importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if dashboard_full:
+                failures.append(f"{name}: {error(exc)}")
+        except Exception as exc:
+            failures.append(f"{name}: {error(exc)}")
+except Exception as exc:
+    failures.append("ray.dashboard.modules: " + error(exc))
+
+print(json.dumps({
+    "grpc": origin, "grpc_entry": grpc_entry, "grpc_sources": added_by(grpc_entry), "grpc_error": grpc_error,
+    "grpc_in_env": any(os.path.isfile(os.path.join(d, "grpc", "__init__.py")) for d in site_dirs),
+    "grpcio": version, "grpcio_dir": dist_dir,
+    "dashboard_full": dashboard_full, "dashboard_failures": failures,
+    "shadowing": shadowing, "shadow_sources": shadow_sources,
+    "sitecustomize": getattr(importlib.util.find_spec("sitecustomize"), "origin", None),
+    "prefix": sys.prefix, "python": sys.executable}), flush=True)
 """
 
 
-def grpc_diagnosis(info, import_ok):
-    """Turn the probe result into an actionable blocker (empty when grpc imports)."""
-    if import_ok:
-        return []
-    if not info:
-        return ["grpc does not import in the training environment (see traceback above), so Ray's agent dies "
-                "and the node never starts"]
-    where = ", ".join(info["sources"]) or "an unknown startup file"
-    if info["grpc"] is None or info["grpcio"] is None:
-        found = f"; the only grpc on sys.path is {info['grpc']} (added by {where})" if info["grpc"] else ""
-        return [f"grpcio is not installed in {info['prefix']}{found}. Ray's agent needs it, so the node never "
-                f"starts. Install it into this env: {info['python']} -m pip install grpcio"]
-    return [f"grpcio {info['grpcio']} is installed, but {info['entry']} (added by {where}) comes first on sys.path "
-            f"and its broken grpc wins. Remove that entry from the file(s) named"]
+def env_diagnosis(info):
+    """Turn the probe result into actionable blockers (empty when Ray's node can start)."""
+    if info is None:
+        return ["The training-environment probe failed (see output above)"]
+    error = info["grpc_error"]
+    grpc_missing = error is not None and info["grpc"] is None
+    if error and (info["dashboard_full"] or not grpc_missing):
+        where = ", ".join(info["grpc_sources"]) or "an unknown startup file"
+        found = f" Python finds {info['grpc']} (added by {where}) instead," if info["grpc"] else ""
+        if not info["grpc_in_env"]:
+            meta = (f" The grpcio {info['grpcio']} metadata it sees lives in {info['grpcio_dir']}, not in the env."
+                    if info["grpcio"] else "")
+            return [f"The env {info['prefix']} has no grpc package in its site-packages.{found} and it fails: "
+                    f"{error}.{meta} Ray's dashboard agent needs grpc, so the node never starts. Install grpcio "
+                    f"into the env (--ignore-installed so pip does not accept the copy outside it): "
+                    f"{info['python']} -m pip install --ignore-installed --no-deps grpcio"]
+        if info["grpc_entry"] and info["grpc_sources"]:
+            return [f"The env has grpc, but {info['grpc_entry']} (added by {where}) is searched first and its "
+                    f"grpc fails: {error}. Remove that entry from the file(s) named"]
+        return [f"The env's own grpc fails to import: {error}. Reinstall it: "
+                f"{info['python']} -m pip install --force-reinstall --no-deps grpcio"]
+    if info["dashboard_failures"]:
+        return ["Ray's dashboard agent modules fail to import in the training environment, so the Ray node would "
+                "not start: " + "; ".join(info["dashboard_failures"][:5])]
+    return []
 
 
 def probe_python_env(env, repo):
     result = subprocess.run([sys.executable, "-c", ENV_PROBE], cwd=repo, env=env, text=True,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-    lines = result.stdout.strip().splitlines()
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+    lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
     try:
-        info = json.loads(lines[0]) if lines else None
+        info = json.loads(lines[-1]) if lines else None
     except ValueError:
         info = None
-    return info, result.returncode == 0, result.stderr
+    if info is None:
+        print(result.stderr[-3000:], file=sys.stderr)
+    return info
 
 
 def python_env_blockers(env, repo):
-    """Ray's dashboard and per-node agent import grpc; if that fails the raylet exits and ray.init times out.
+    """Check that Ray's node can start in the training environment (its agent imports grpc and all
+    dashboard modules; a failure there makes ray.init time out).
 
     Returns (blockers, env_updates). Startup-file entries that shadow installed packages are dropped for the
     training processes only, via pathfix/sitecustomize.py; nothing in the environment is edited.
     """
-    info, ok, stderr = probe_python_env(env, repo)
+    info = probe_python_env(env, repo)
     updates = {}
     if info and info["shadowing"]:
         for entry, names in info["shadowing"].items():
@@ -297,16 +351,16 @@ def python_env_blockers(env, repo):
                   f"site-packages, where it shadows {', '.join(names)}")
         updates = {"PYTHONPATH": env["PYTHONPATH"] + os.pathsep + str(PATHFIX_DIR),
                    "BASELINE_DROP_SYS_PATH": os.pathsep.join(info["shadowing"])}
-        info, ok, stderr = probe_python_env(dict(env, **updates), repo)
+        info = probe_python_env(dict(env, **updates), repo)
         if info and info["shadowing"]:
-            print(stderr[-2000:], file=sys.stderr)
+            files = ", ".join(sum(info["shadow_sources"].values(), []))
             return [f"Could not drop {', '.join(info['shadowing'])} automatically (active sitecustomize: "
-                    f"{info['sitecustomize']}); remove it from {', '.join(sum(info['shadow_sources'].values(), []))}"], {}
-    if not ok:
-        print(stderr[-2000:], file=sys.stderr)
-    elif info:
-        print(f"grpc: {info['grpc']} (grpcio {info['grpcio']})")
-    return grpc_diagnosis(info, ok), updates
+                    f"{info['sitecustomize']}); remove it from {files}"], {}
+    if info:
+        mode = "full" if info["dashboard_full"] else "minimal"
+        print(f"grpc: {info['grpc']} (grpcio {info['grpcio']} at {info['grpcio_dir']}); "
+              f"Ray dashboard modules ({mode}): {len(info['dashboard_failures'])} import failure(s)")
+    return env_diagnosis(info), updates
 
 
 def owned_ray_processes():
