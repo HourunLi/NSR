@@ -177,20 +177,34 @@ def ray_cluster_blockers(env, n_gpus, nnodes):
 
 
 def describe_existing_run(run_dir, tail_bytes=16 * 1024, tail_lines=30):
-    """Show why a previous attempt in this directory stopped; never modifies it."""
+    """Show why a previous attempt in this directory stopped; read-only. Returns saved checkpoint names."""
     print(f"Existing experiment directory: {run_dir}")
     checkpoints = sorted(path.name for path in (run_dir / "checkpoints").glob("global_step_*"))
     print("  saved checkpoints:", ", ".join(checkpoints) or "none")
     log = run_dir / "train.log"
     if not log.is_file():
         print("  no train.log (the previous attempt stopped before training started)")
-        return
+        return checkpoints
     with log.open("rb") as stream:
         stream.seek(max(0, log.stat().st_size - tail_bytes))
         lines = stream.read().decode("utf-8", errors="replace").splitlines()[-tail_lines:]
     print(f"  last {len(lines)} lines of {log}:")
     for line in lines:
         print("  | " + line)
+    return checkpoints
+
+
+def existing_run_plan(run_dir, overwrite):
+    """Return (replace, blocker). Failed attempts (no checkpoint) are replaced; saved checkpoints need --overwrite."""
+    if not run_dir.exists() and not run_dir.is_symlink():
+        return False, None
+    if run_dir.is_symlink() or not run_dir.is_dir():
+        return False, f"{run_dir} exists but is not a plain directory; remove it yourself"
+    checkpoints = describe_existing_run(run_dir)
+    if checkpoints and not overwrite:
+        return False, (f"{run_dir} holds saved checkpoints ({', '.join(checkpoints)}); "
+                       "add --overwrite to delete it and train again, or use a new --name")
+    return True, None
 
 
 def owned_training_processes():
@@ -231,6 +245,12 @@ def main():
         "--nnodes", type=int, choices=(1, 4), default=None,
         help="Ray nodes. Default: 4 with --n-gpus 8 (author 32-GPU layout; needs a running multi-node Ray "
              "cluster reached via RAY_ADDRESS), otherwise 1. Use --n-gpus 8 --nnodes 1 for one 8-GPU machine.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Also replace an existing experiment directory that holds saved checkpoints. A directory from a "
+             "failed attempt (logs, no checkpoint) is always replaced. Never resumes.",
     )
     parser.add_argument(
         "--skip-disk-check",
@@ -320,10 +340,11 @@ def main():
         print("UNSAFE OVERRIDE: selected-GPU occupancy checks are explicitly skipped.")
         if busy:
             print("GPU WARNING (ignored by launcher): selected GPUs already have allocations:", busy)
-    if run_dir.exists():
-        describe_existing_run(run_dir)
-        blockers.append("Experiment directory already exists; this fresh-run launcher never overwrites or resumes it. "
-                        "Keep it for its log and use a new --name, or move it aside first")
+    replace_existing, existing_blocker = existing_run_plan(run_dir, args.overwrite)
+    if existing_blocker:
+        blockers.append(existing_blocker)
+    elif replace_existing:
+        print(f"OVERWRITE: {run_dir} will be deleted and replaced by a fresh run once all checks pass")
     if not os.access(existing_parent(runs), os.W_OK):
         blockers.append("Checkpoint parent directory is not writable")
     if args.action == "check":
@@ -336,6 +357,9 @@ def main():
         blockers.append("Selected GPUs have existing processes/memory allocations; no processes will be stopped")
     if blockers:
         raise RuntimeError("; ".join(blockers))
+    if replace_existing:
+        shutil.rmtree(run_dir)
+        print(f"Deleted previous experiment directory: {run_dir}", flush=True)
     run_dir.mkdir(parents=True, exist_ok=False)
     for key in ("TMPDIR", "RAY_TMPDIR", "HF_HOME", "HF_DATASETS_CACHE", "TORCH_HOME", "VLLM_CACHE_ROOT", "XDG_CACHE_HOME", "CUDA_CACHE_PATH", "TRITON_CACHE_DIR"):
         Path(env[key]).mkdir(parents=True, exist_ok=True)

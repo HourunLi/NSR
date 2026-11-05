@@ -186,7 +186,7 @@ nohup python -u -m baseline_4gpu.launch run \
 tail -n 100 -f "$NSR_ROOT/paper-runs/DAPO7B-paper4-v2/train.log"
 ```
 
-使用 `BASELINE_RUNS` 时相应调整路径。此启动器只接受新实验目录；同名目录已存在时拒绝覆盖，也不会偷偷 resume。拒绝时会打印旧目录中已有的 checkpoint 和 `train.log` 末尾 30 行，便于先确认上一次为何停止。重跑先保存失败日志，再换一个明确的新 `--name`（或手动把旧目录改名移开）。
+使用 `BASELINE_RUNS` 时相应调整路径。同名实验目录已存在时，启动器先打印其中的 checkpoint 和 `train.log` 末尾 30 行，然后在全部检查通过后**删除整个旧目录并从头训练**（不 resume）。没有任何 checkpoint 的失败目录直接覆盖；已有 `checkpoints/global_step_*`（即跑完过的实验）时需要显式加 `--overwrite` 才会删除。任何检查未通过时旧目录保持不动。
 
 日志开头应出现：NSR=False、total_training_steps=300、n_gpus_per_node=4、val_kwargs.n=1、gpu_memory_utilization=0.6、学习率warmup=0。先初始验证，之后才开始训练；这不是卡住的充分证据。
 

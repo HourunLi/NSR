@@ -6,7 +6,7 @@ import unittest
 import contextlib
 import io
 
-from .launch import cluster_blockers, describe_existing_run
+from .launch import cluster_blockers, describe_existing_run, existing_run_plan
 from .protocol import SYSTEM_PROMPT, dataset_path, hydra_args, settings, validate_aime_rows, with_answer_system
 from .report import pass_at_k, summarize
 
@@ -153,6 +153,23 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("ValueError: boom", out.getvalue())
         self.assertNotIn("line 50", out.getvalue())
         self.assertEqual(sorted(str(path) for path in run.rglob("*")), before)
+
+    def test_existing_run_overwrite_policy(self):
+        runs = self.root / "paper-runs"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(existing_run_plan(runs / "new", overwrite=False), (False, None))
+            failed = runs / "failed"
+            failed.mkdir(parents=True)
+            (failed / "train.log").write_text("Traceback\n")
+            self.assertEqual(existing_run_plan(failed, overwrite=False), (True, None))
+            done = runs / "done"
+            (done / "checkpoints/global_step_300").mkdir(parents=True)
+            replace, blocker = existing_run_plan(done, overwrite=False)
+            self.assertFalse(replace)
+            self.assertIn("--overwrite", blocker)
+            self.assertEqual(existing_run_plan(done, overwrite=True), (True, None))
+            (runs / "file").write_text("x")
+            self.assertFalse(existing_run_plan(runs / "file", overwrite=True)[0])
 
     def test_pass_estimator(self):
         self.assertEqual(pass_at_k(32, 0, 16), 0)
