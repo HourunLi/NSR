@@ -183,6 +183,9 @@ def gpu_status(env, n_gpus):
 
 
 PATHFIX_DIR = Path(__file__).resolve().parent / "pathfix"
+# verl imports flash_attn.bert_padding on CUDA and loads the model with flash_attention_2, so it is required.
+# Same flash-attn release as the reference environment (manifests/pip-freeze.txt); only the build differs.
+FLASH_ATTN_VERSION = "2.7.4.post1"
 
 ENV_PROBE = r"""
 import glob, importlib, importlib.metadata, importlib.util, json, os, pkgutil, site, sys
@@ -259,6 +262,20 @@ try:
 except Exception as exc:
     grpc_error = error(exc)
 
+flash_version = flash_error = None
+try:
+    import flash_attn, flash_attn_2_cuda
+    from flash_attn.bert_padding import unpad_input
+    flash_version = flash_attn.__version__
+except Exception as exc:
+    flash_error = error(exc)
+try:
+    import torch
+    torch_info = {"version": torch.__version__, "cuda": torch.version.cuda,
+                  "cxx11abi": bool(torch._C._GLIBCXX_USE_CXX11_ABI)}
+except Exception as exc:
+    torch_info = {"error": error(exc)}
+
 # Replay what Ray's dashboard and per-node agent do at startup (ray.dashboard.utils.get_all_modules):
 # full mode when the optional dashboard deps import; then every module under ray.dashboard.modules is
 # imported, and a failure there kills the agent and with it the raylet.
@@ -289,16 +306,44 @@ print(json.dumps({
     "grpc_in_env": any(os.path.isfile(os.path.join(d, "grpc", "__init__.py")) for d in site_dirs),
     "grpcio": version, "grpcio_dir": dist_dir,
     "dashboard_full": dashboard_full, "dashboard_failures": failures,
+    "flash_attn": flash_version, "flash_error": flash_error, "torch": torch_info,
+    "python_tag": f"cp{sys.version_info[0]}{sys.version_info[1]}",
     "shadowing": shadowing, "shadow_sources": shadow_sources,
     "sitecustomize": getattr(importlib.util.find_spec("sitecustomize"), "origin", None),
     "prefix": sys.prefix, "python": sys.executable}), flush=True)
 """
 
 
+def flash_attn_wheel(info):
+    """URL of the prebuilt flash-attn wheel matching the env's torch, CUDA major, C++ ABI and Python."""
+    torch_info = info.get("torch", {})
+    if "version" not in torch_info or not torch_info.get("cuda"):
+        return None
+    torch_mm = ".".join(torch_info["version"].split("+")[0].split(".")[:2])
+    cuda_major = torch_info["cuda"].split(".")[0]
+    abi = "TRUE" if torch_info["cxx11abi"] else "FALSE"
+    tag = info["python_tag"]
+    name = (f"flash_attn-{FLASH_ATTN_VERSION}+cu{cuda_major}torch{torch_mm}cxx11abi{abi}-{tag}-{tag}"
+            "-linux_x86_64.whl")
+    return ("https://github.com/Dao-AILab/flash-attention/releases/download/"
+            f"v{FLASH_ATTN_VERSION}/{name.replace('+', '%2B')}")
+
+
 def env_diagnosis(info):
-    """Turn the probe result into actionable blockers (empty when Ray's node can start)."""
+    """Turn the probe result into actionable blockers (empty when the training environment can run)."""
     if info is None:
         return ["The training-environment probe failed (see output above)"]
+    blockers = ray_env_diagnosis(info)
+    if info.get("flash_error"):
+        wheel = flash_attn_wheel(info)
+        hint = (f" Install the matching prebuilt wheel: {info['python']} -m pip install \"{wheel}\""
+                if wheel else f" torch: {info.get('torch')}")
+        blockers.append(f"flash-attn does not import ({info['flash_error']}); verl needs it (flash_attn.bert_padding, "
+                        f"attn_implementation=flash_attention_2).{hint}")
+    return blockers
+
+
+def ray_env_diagnosis(info):
     error = info["grpc_error"]
     grpc_missing = error is not None and info["grpc"] is None
     if error and (info["dashboard_full"] or not grpc_missing):
@@ -360,6 +405,7 @@ def python_env_blockers(env, repo):
         mode = "full" if info["dashboard_full"] else "minimal"
         print(f"grpc: {info['grpc']} (grpcio {info['grpcio']} at {info['grpcio_dir']}); "
               f"Ray dashboard modules ({mode}): {len(info['dashboard_failures'])} import failure(s)")
+        print(f"torch: {info['torch']}; flash-attn: {info['flash_attn'] or 'NOT IMPORTABLE'}")
     return env_diagnosis(info), updates
 
 
