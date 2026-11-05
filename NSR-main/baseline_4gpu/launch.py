@@ -90,6 +90,8 @@ def environment(root, repo, name, n_gpus, nnodes):
         "PYTHONUNBUFFERED": "1", "HYDRA_FULL_ERROR": "1",
         # Inherited entries can shadow installed packages (e.g. a vendored grpc), which kills Ray's agents.
         "PYTHONPATH": str(repo),
+        # User-site *.pth files are searched before the env's site-packages and can shadow its packages too.
+        "PYTHONNOUSERSITE": "1",
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "HF_HOME": str(root / "cache/huggingface"),
         "HF_DATASETS_CACHE": str(root / "cache/huggingface/datasets"),
@@ -180,23 +182,70 @@ def gpu_status(env, n_gpus):
     return busy
 
 
-ENV_PROBE = """
+ENV_PROBE = r"""
+import glob, importlib.metadata, importlib.util, json, os, site, sys
+spec = importlib.util.find_spec("grpc")
+origin = spec.origin if spec else None
+try:
+    version = importlib.metadata.version("grpcio")
+except importlib.metadata.PackageNotFoundError:
+    version = None
+entry = None
+if origin:
+    entry = max((p for p in sys.path if p and origin.startswith(os.path.join(os.path.abspath(p), ""))),
+                key=len, default=None)
+sources = []
+if entry:
+    files = []
+    for d in list(site.getsitepackages()) + ([site.getusersitepackages()] if site.ENABLE_USER_SITE else []):
+        files += sorted(glob.glob(os.path.join(d, "*.pth")))
+    for name in ("sitecustomize", "usercustomize"):
+        found = importlib.util.find_spec(name)
+        if found and found.origin:
+            files.append(found.origin)
+    for path in files:
+        try:
+            if entry.rstrip("/") in open(path, encoding="utf-8", errors="replace").read():
+                sources.append(path)
+        except OSError:
+            pass
+print(json.dumps({"grpc": origin, "grpcio": version, "entry": entry, "sources": sources,
+                  "prefix": sys.prefix, "python": sys.executable}), flush=True)
 import grpc
 from grpc._cython import cygrpc
-print(grpc.__file__)
 """
+
+
+def grpc_diagnosis(info, import_ok):
+    """Turn the probe result into an actionable blocker (empty when grpc imports)."""
+    if import_ok:
+        return []
+    if not info:
+        return ["grpc does not import in the training environment (see traceback above), so Ray's agent dies "
+                "and the node never starts"]
+    where = ", ".join(info["sources"]) or "an unknown startup file"
+    if info["grpc"] is None or info["grpcio"] is None:
+        found = f"; the only grpc on sys.path is {info['grpc']} (added by {where})" if info["grpc"] else ""
+        return [f"grpcio is not installed in {info['prefix']}{found}. Ray's agent needs it, so the node never "
+                f"starts. Install it into this env: {info['python']} -m pip install grpcio"]
+    return [f"grpcio {info['grpcio']} is installed, but {info['entry']} (added by {where}) comes first on sys.path "
+            f"and its broken grpc wins. Remove that entry from the file(s) named"]
 
 
 def python_env_blockers(env, repo):
     """Ray's dashboard and per-node agent import grpc; if that fails the raylet exits and ray.init times out."""
     result = subprocess.run([sys.executable, "-c", ENV_PROBE], cwd=repo, env=env, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    lines = result.stdout.strip().splitlines()
+    try:
+        info = json.loads(lines[0]) if lines else None
+    except ValueError:
+        info = None
     if result.returncode:
         print(result.stderr[-2000:], file=sys.stderr)
-        return ["grpc does not import in the training environment (see traceback above), so Ray's agent dies "
-                "and the node never starts. Remove the shadowing path from site-packages *.pth / user site"]
-    print("grpc:", result.stdout.strip())
-    return []
+    elif info:
+        print(f"grpc: {info['grpc']} (grpcio {info['grpcio']})")
+    return grpc_diagnosis(info, result.returncode == 0)
 
 
 def owned_ray_processes():

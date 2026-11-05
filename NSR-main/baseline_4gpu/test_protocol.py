@@ -197,7 +197,21 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(env["PYTHONPATH"], str(repo))
             self.assertNotIn("RAY_ADDRESS", env)
             self.assertEqual(env["NNODES"], "1")
+            self.assertEqual(env["PYTHONNOUSERSITE"], "1")
             self.assertEqual(launch.environment(Path("/data/lihourun/NSR"), repo, "run", 8, 4)["RAY_ADDRESS"], "auto")
+
+    def test_grpc_diagnosis(self):
+        shadow = "/modelarts/tools/visualization/tensorboard"
+        base = {"grpc": shadow + "/grpc/__init__.py", "entry": shadow, "prefix": "/env",
+                "python": "/env/bin/python", "sources": ["/env/lib/python3.11/site-packages/modelarts.pth"]}
+        self.assertEqual(launch.grpc_diagnosis(dict(base, grpcio="1.83.0"), True), [])
+        missing = launch.grpc_diagnosis(dict(base, grpcio=None), False)[0]
+        self.assertIn("/env/bin/python -m pip install grpcio", missing)
+        self.assertIn("modelarts.pth", missing)
+        shadowed = launch.grpc_diagnosis(dict(base, grpcio="1.83.0"), False)[0]
+        self.assertIn(shadow, shadowed)
+        self.assertIn("modelarts.pth", shadowed)
+        self.assertEqual(len(launch.grpc_diagnosis(None, False)), 1)
 
     def test_existing_run_overwrite_policy(self):
         runs = self.root / "paper-runs"
