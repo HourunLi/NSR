@@ -135,6 +135,8 @@ GPU 0、1、2、3 都释放且允许你使用后，再执行下一节。只看�
 
 ## 6. 启动新的完整单次 baseline
 
+前台运行 `python -u -m baseline_4gpu.launch run ...` 时，训练输出实时显示在终端，同时保存到实验目录的 `train.log`。如果使用下面的 `nohup` 重定向，终端输出会进入 `$LAUNCH_LOG`，可通过 `tail -f` 查看。
+
 ```bash
 cd "$NSR_ROOT/NSR-main"
 export CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -184,7 +186,7 @@ tail -n 100 -f "$NSR_ROOT/paper-runs/DAPO7B-paper4-v2/train.log"
 
 新实验目录中：
 
-- `train.log`：训练输出。
+- `train.log`：训练输出，同时转发到启动器的标准输出。
 - `resolved.yaml`：启动时解析的完整配置。
 - `manifest.json`：显式参数、软件版本、关键源文件哈希、实际system示例、本地模型配置。
 - `launcher_snapshot/`：本次启动器副本。

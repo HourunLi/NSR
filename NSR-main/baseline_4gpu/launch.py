@@ -280,10 +280,15 @@ def main():
                 "model_config": json.loads((root / "models/Qwen2.5-Math-7B/config.json").read_text())}
     (run_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     shutil.copytree(Path(__file__).parent, run_dir / "launcher_snapshot", ignore=shutil.ignore_patterns("__pycache__"))
-    print(f"Starting training. Log: {run_dir / 'train.log'}", flush=True)
-    with (run_dir / "train.log").open("x", encoding="utf-8") as log:
-        process = subprocess.Popen(cmd, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT)
+    print(f"Starting training. Output: terminal and {run_dir / 'train.log'}", flush=True)
+    with (run_dir / "train.log").open("x", encoding="utf-8", buffering=1) as log:
+        process = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", bufsize=1)
         (run_dir / "driver.pid").write_text(str(process.pid) + "\n")
+        with process.stdout:
+            for line in process.stdout:
+                log.write(line)
+                print(line, end="", flush=True)
         code = process.wait()
     print(f"Training process exited with code {code}")
     if code != 0:
