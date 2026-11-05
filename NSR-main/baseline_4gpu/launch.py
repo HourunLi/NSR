@@ -12,7 +12,7 @@ import subprocess
 import sys
 import traceback
 
-from .protocol import SYSTEM_PROMPT, hydra_args, settings, validate_aime_rows, with_answer_system
+from .protocol import SYSTEM_PROMPT, dataset_path, hydra_args, settings, validate_aime_rows, with_answer_system
 
 GIB = 1024 ** 3
 MIN_FREE_GIB = 300  # Conservative budget for two full checkpoints, exports and working files.
@@ -80,7 +80,9 @@ def check_data(root):
     adapter.prompt_key, adapter.image_key, adapter.video_key = "prompt", "images", "videos"
     examples = {}
     for filename in ("dapo-math-17k.parquet", "aime-2024.parquet"):
-        file = pq.ParquetFile(root / "data" / filename)
+        path = dataset_path(root, filename)
+        print(f"Dataset path: {path}")
+        file = pq.ParquetFile(path)
         row = next(file.iter_batches(batch_size=1)).to_pylist()[0]
         if "Answer:" not in str(row["prompt"]):
             raise ValueError(f"Unexpected answer instruction in {filename}")
@@ -96,7 +98,7 @@ def check_data(root):
         print(f"Dataset {filename}: {file.metadata.num_rows} rows")
         if filename.startswith("dapo") and (file.metadata.num_rows // 1536) * 3 < 300 * 10:
             raise ValueError("Three epochs may not provide the configured 300-step generation budget")
-    val = pq.read_table(root / "data/aime-2024.parquet", columns=["prompt", "data_source"]).to_pylist()
+    val = pq.read_table(dataset_path(root, "aime-2024.parquet"), columns=["prompt", "data_source"]).to_pylist()
     validate_aime_rows(val)
     print("AIME: 30 distinct questions x 32 rows x n=1 = 960 samples per evaluation")
     # Verify every distinct validation prompt, not just its first row.

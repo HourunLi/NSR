@@ -42,14 +42,26 @@ def validate_aime_rows(rows):
     return counts
 
 
+def dataset_path(root: Path, filename: str):
+    """Resolve flat or dataset-repository layout without selecting ambiguous copies."""
+    data = root / "data"
+    candidates = [path for path in [data / filename, *sorted(data.glob(f"*/data/{filename}"))]
+                  if path.is_file()]
+    if not candidates:
+        raise FileNotFoundError(f"Dataset not found: {data / filename} or {data}/*/data/{filename}")
+    if len(candidates) > 1:
+        raise ValueError(f"Multiple copies of {filename}; keep one dataset location: {candidates}")
+    return candidates[0]
+
+
 def settings(root: Path, run_dir: Path, n_gpus: int = 4):
     """Explicit overrides; no hidden repeated runs and no unrecorded fast-mode flags."""
     if n_gpus not in (2, 4, 8):
         raise ValueError("This launcher supports 2/4 GPUs locally, or 8 GPUs per node across 4 nodes")
     return {
         # Paper B.1/B.2/B.3; prompt length/truncation/gen batch from author script.
-        "data.train_files": str(root / "data/dapo-math-17k.parquet"),
-        "data.val_files": str(root / "data/aime-2024.parquet"),
+        "data.train_files": str(dataset_path(root, "dapo-math-17k.parquet")),
+        "data.val_files": str(dataset_path(root, "aime-2024.parquet")),
         "data.prompt_key": "prompt",
         "data.truncation": "left",
         "data.max_prompt_length": 2048,

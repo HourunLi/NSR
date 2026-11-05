@@ -73,6 +73,19 @@ python -m unittest baseline_4gpu.test_protocol -v
 
 ## 4. 预检查（可以在旧任务仍运行时执行）
 
+数据支持以下两种目录格式，也可以训练集和验证集各用一种。数据集目录名称不限；按 Parquet 文件名查找，不读取旁边的 README 或 JSON 元信息：
+
+```text
+$NSR_ROOT/data/dapo-math-17k.parquet
+$NSR_ROOT/data/aime-2024.parquet
+
+或：
+$NSR_ROOT/data/DAPO-Math-17k/data/dapo-math-17k.parquet
+$NSR_ROOT/data/AIME-2024/data/aime-2024.parquet
+```
+
+预检查会打印实际文件路径，训练配置和 manifest 使用同样的解析规则。文件缺失或存在多份同名候选时会报错，不自动选取其中一份。数据内容要求不变，包括 AIME 验证集为 30 题各重复 32 次、共 960 行。
+
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 python -u -m baseline_4gpu.launch check --name DAPO7B-paper4-v2
