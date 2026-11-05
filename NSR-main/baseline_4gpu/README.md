@@ -39,7 +39,9 @@
 
 完整保存包含 FSDP 权重、Adam 状态、其他恢复信息和 HF 导出。7.62B 模型在不同精度下，一个完整 checkpoint 可能约 100–120 GiB；实际以文件为准。保留两个并留工作空间，本启动器采用 **300 GiB 可用空间的保守门槛**，这不是论文规定，也不是最低理论需求。
 
-还会要求运行时所在文件系统至少有20 GiB且至少6%可用，避免继续依赖调高 Ray 满盘阈值。若输出盘另有位置，可设置 `BASELINE_RUNS=/你的可写目录/paper-runs`，但运行时/缓存目录仍需要足够空间。
+还会要求运行时所在文件系统至少有20 GiB且至少6%可用，避免继续依赖调高 Ray 满盘阈值。
+
+Ray 和 vLLM 通过 Unix socket 通信，`TMPDIR`/`RAY_TMPDIR` 必须在本地盘。默认放在 `NSR_ROOT` 的上一级（`tp/`、`rp/<hash>/`）；若那里是 FUSE（如 OBS/obsfs、s3fs）或 NFS 等挂载，启动器自动改用 `/tmp/tp`、`/tmp/rp/<hash>`，也可用 `BASELINE_LOCAL_TMP=/本地盘目录` 指定（路径要短，`RAY_TMPDIR` 不超过38个字符）。启动器不把继承的 `PYTHONPATH` 传给训练进程，只放 NSR-main，避免平台注入的包（例如 ModelArts 自带的 grpc）遮蔽 conda 环境里的同名包、导致 Ray agent 起不来；预检查会在训练环境里实际 `import grpc`。单机模式下若本账号已有 Ray（`gcs_server`/`raylet`）在运行，启动器拒绝启动，以免 `ray.init()` 连到残留实例。若输出盘另有位置，可设置 `BASELINE_RUNS=/你的可写目录/paper-runs`，但运行时/缓存目录仍需要足够空间。
 
 ```bash
 df -h /home/lihourun/hsc/NSR-work

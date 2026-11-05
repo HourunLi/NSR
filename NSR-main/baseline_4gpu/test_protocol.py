@@ -5,8 +5,11 @@ import unittest
 
 import contextlib
 import io
+import os
+from unittest import mock
 
-from .launch import cluster_blockers, describe_existing_run, existing_run_plan
+from . import launch
+from .launch import cluster_blockers, describe_existing_run, existing_run_plan, mount_fstype, temp_dirs
 from .protocol import SYSTEM_PROMPT, dataset_path, hydra_args, settings, validate_aime_rows, with_answer_system
 from .report import pass_at_k, summarize
 
@@ -153,6 +156,48 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("ValueError: boom", out.getvalue())
         self.assertNotIn("line 50", out.getvalue())
         self.assertEqual(sorted(str(path) for path in run.rglob("*")), before)
+
+    def test_mount_fstype_longest_prefix(self):
+        mounts = "\n".join([
+            "overlay / overlay rw 0 0",
+            "tmpfs /dev/shm tmpfs rw 0 0",
+            "obsfs /data/lihourun fuse.obsfs rw 0 0",
+            "/dev/sdb /data/lihourun2 xfs rw 0 0",
+            "srv:/x /mnt/with\\040space nfs4 rw 0 0",
+        ])
+        self.assertEqual(mount_fstype("/data/lihourun/rp/abc", mounts), "fuse.obsfs")
+        self.assertEqual(mount_fstype("/data/lihourun", mounts), "fuse.obsfs")
+        self.assertEqual(mount_fstype("/data/lihourun2/rp", mounts), "xfs")
+        self.assertEqual(mount_fstype("/data/other", mounts), "overlay")
+        self.assertEqual(mount_fstype("/mnt/with space/a", mounts), "nfs4")
+        self.assertFalse(launch.socket_capable("fuse.obsfs"))
+        self.assertFalse(launch.socket_capable("nfs4"))
+        self.assertTrue(launch.socket_capable("ext4"))
+
+    def test_temp_dirs_leave_object_store_mounts(self):
+        root = Path("/data/lihourun/NSR")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BASELINE_LOCAL_TMP", None)
+            with mock.patch.object(launch, "mount_fstype", return_value="xfs"):
+                tmp, ray_tmp, note = temp_dirs(root, "run")
+                self.assertEqual((tmp.parent, ray_tmp.parent.parent, note), (root.parent, root.parent, None))
+            with mock.patch.object(launch, "mount_fstype", return_value="fuse.obsfs"):
+                tmp, ray_tmp, note = temp_dirs(root, "run")
+                self.assertEqual((tmp, ray_tmp.parent), (Path("/tmp/tp"), Path("/tmp/rp")))
+                self.assertIn("fuse.obsfs", note)
+                self.assertLessEqual(len(str(ray_tmp)), launch.MAX_RAY_TMPDIR_CHARS)
+            os.environ["BASELINE_LOCAL_TMP"] = "/cache"
+            self.assertEqual(temp_dirs(root, "run")[1].parent, Path("/cache/rp"))
+
+    def test_training_env_drops_inherited_pythonpath(self):
+        repo = Path("/data/lihourun/NSR/NSR-main")
+        inherited = {"PYTHONPATH": "/modelarts/tools/visualization/tensorboard", "RAY_ADDRESS": "auto"}
+        with mock.patch.dict(os.environ, inherited), mock.patch.object(launch, "mount_fstype", return_value="xfs"):
+            env = launch.environment(Path("/data/lihourun/NSR"), repo, "run", 8, 1)
+            self.assertEqual(env["PYTHONPATH"], str(repo))
+            self.assertNotIn("RAY_ADDRESS", env)
+            self.assertEqual(env["NNODES"], "1")
+            self.assertEqual(launch.environment(Path("/data/lihourun/NSR"), repo, "run", 8, 4)["RAY_ADDRESS"], "auto")
 
     def test_existing_run_overwrite_policy(self):
         runs = self.root / "paper-runs"
