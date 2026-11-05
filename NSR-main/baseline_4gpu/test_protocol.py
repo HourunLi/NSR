@@ -213,6 +213,19 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("modelarts.pth", shadowed)
         self.assertEqual(len(launch.grpc_diagnosis(None, False)), 1)
 
+    def test_pathfix_drops_listed_entries_only(self):
+        import subprocess
+        import sys
+        shadow = self.root / "modelarts"
+        (shadow / "grpc").mkdir(parents=True)
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(launch.PATHFIX_DIR), str(shadow), str(self.root)]),
+                   BASELINE_DROP_SYS_PATH=str(shadow))
+        out = subprocess.run([sys.executable, "-c", "import json, sys; print(json.dumps(sys.path))"],
+                             env=env, capture_output=True, text=True, check=True).stdout
+        paths = json.loads(out)
+        self.assertNotIn(str(shadow), paths)
+        self.assertIn(str(self.root), paths)
+
     def test_existing_run_overwrite_policy(self):
         runs = self.root / "paper-runs"
         with contextlib.redirect_stdout(io.StringIO()):

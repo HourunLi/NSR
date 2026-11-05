@@ -182,8 +182,59 @@ def gpu_status(env, n_gpus):
     return busy
 
 
+PATHFIX_DIR = Path(__file__).resolve().parent / "pathfix"
+
 ENV_PROBE = r"""
 import glob, importlib.metadata, importlib.util, json, os, site, sys
+
+def top_level(directory):
+    names = set()
+    try:
+        items = os.listdir(directory)
+    except OSError:
+        return names
+    for item in items:
+        if os.path.isdir(os.path.join(directory, item)):
+            if item.isidentifier() and item != "__pycache__":
+                names.add(item)
+        elif item.endswith((".py", ".so", ".pyd")) and item.split(".")[0].isidentifier():
+            names.add(item.split(".")[0])
+    return names
+
+site_dirs = [os.path.abspath(p) for p in site.getsitepackages()]
+startup_files = []
+for d in site_dirs + ([site.getusersitepackages()] if site.ENABLE_USER_SITE else []):
+    startup_files += sorted(glob.glob(os.path.join(d, "*.pth")))
+for name in ("sitecustomize", "usercustomize"):
+    found = importlib.util.find_spec(name)
+    if found and found.origin:
+        startup_files.append(found.origin)
+
+def added_by(entry):
+    hits = []
+    for path in startup_files:
+        try:
+            if entry.rstrip("/") in open(path, encoding="utf-8", errors="replace").read():
+                hits.append(path)
+        except OSError:
+            pass
+    return hits
+
+# Entries placed ahead of the env's site-packages by startup files (not PYTHONPATH, not the stdlib)
+# that contain top-level names also installed in site-packages.
+keep = {os.path.abspath(p) for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p}
+roots = tuple(os.path.join(os.path.abspath(r), "") for r in {sys.prefix, sys.base_prefix})
+positions = [i for i, p in enumerate(sys.path) if p and os.path.abspath(p) in site_dirs]
+installed = set().union(*(top_level(d) for d in site_dirs)) if site_dirs else set()
+shadowing, shadow_sources = {}, {}
+for entry in sys.path[:min(positions) if positions else len(sys.path)]:
+    full = os.path.abspath(entry) if entry else ""
+    if not entry or full in keep or full.startswith(roots):
+        continue
+    clash = sorted(top_level(full) & installed)
+    if clash:
+        shadowing[entry], shadow_sources[entry] = clash[:8], added_by(entry)
+
 spec = importlib.util.find_spec("grpc")
 origin = spec.origin if spec else None
 try:
@@ -194,22 +245,10 @@ entry = None
 if origin:
     entry = max((p for p in sys.path if p and origin.startswith(os.path.join(os.path.abspath(p), ""))),
                 key=len, default=None)
-sources = []
-if entry:
-    files = []
-    for d in list(site.getsitepackages()) + ([site.getusersitepackages()] if site.ENABLE_USER_SITE else []):
-        files += sorted(glob.glob(os.path.join(d, "*.pth")))
-    for name in ("sitecustomize", "usercustomize"):
-        found = importlib.util.find_spec(name)
-        if found and found.origin:
-            files.append(found.origin)
-    for path in files:
-        try:
-            if entry.rstrip("/") in open(path, encoding="utf-8", errors="replace").read():
-                sources.append(path)
-        except OSError:
-            pass
-print(json.dumps({"grpc": origin, "grpcio": version, "entry": entry, "sources": sources,
+customize = importlib.util.find_spec("sitecustomize")
+print(json.dumps({"grpc": origin, "grpcio": version, "entry": entry, "sources": added_by(entry) if entry else [],
+                  "shadowing": shadowing, "shadow_sources": shadow_sources,
+                  "sitecustomize": customize.origin if customize else None,
                   "prefix": sys.prefix, "python": sys.executable}), flush=True)
 import grpc
 from grpc._cython import cygrpc
@@ -232,8 +271,7 @@ def grpc_diagnosis(info, import_ok):
             f"and its broken grpc wins. Remove that entry from the file(s) named"]
 
 
-def python_env_blockers(env, repo):
-    """Ray's dashboard and per-node agent import grpc; if that fails the raylet exits and ray.init times out."""
+def probe_python_env(env, repo):
     result = subprocess.run([sys.executable, "-c", ENV_PROBE], cwd=repo, env=env, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
     lines = result.stdout.strip().splitlines()
@@ -241,11 +279,34 @@ def python_env_blockers(env, repo):
         info = json.loads(lines[0]) if lines else None
     except ValueError:
         info = None
-    if result.returncode:
-        print(result.stderr[-2000:], file=sys.stderr)
+    return info, result.returncode == 0, result.stderr
+
+
+def python_env_blockers(env, repo):
+    """Ray's dashboard and per-node agent import grpc; if that fails the raylet exits and ray.init times out.
+
+    Returns (blockers, env_updates). Startup-file entries that shadow installed packages are dropped for the
+    training processes only, via pathfix/sitecustomize.py; nothing in the environment is edited.
+    """
+    info, ok, stderr = probe_python_env(env, repo)
+    updates = {}
+    if info and info["shadowing"]:
+        for entry, names in info["shadowing"].items():
+            source = ", ".join(info["shadow_sources"][entry]) or "an unknown startup file"
+            print(f"Dropping sys.path entry {entry} for training processes: {source} puts it ahead of the env's "
+                  f"site-packages, where it shadows {', '.join(names)}")
+        updates = {"PYTHONPATH": env["PYTHONPATH"] + os.pathsep + str(PATHFIX_DIR),
+                   "BASELINE_DROP_SYS_PATH": os.pathsep.join(info["shadowing"])}
+        info, ok, stderr = probe_python_env(dict(env, **updates), repo)
+        if info and info["shadowing"]:
+            print(stderr[-2000:], file=sys.stderr)
+            return [f"Could not drop {', '.join(info['shadowing'])} automatically (active sitecustomize: "
+                    f"{info['sitecustomize']}); remove it from {', '.join(sum(info['shadow_sources'].values(), []))}"], {}
+    if not ok:
+        print(stderr[-2000:], file=sys.stderr)
     elif info:
         print(f"grpc: {info['grpc']} (grpcio {info['grpcio']})")
-    return grpc_diagnosis(info, result.returncode == 0)
+    return grpc_diagnosis(info, ok), updates
 
 
 def owned_ray_processes():
@@ -435,7 +496,9 @@ def main():
         print(result.stderr, file=sys.stderr)
         raise RuntimeError("Hydra configuration check failed; nothing has been launched")
     print("Hydra configuration: OK")
-    env_blockers = python_env_blockers(compose_env, repo)
+    env_blockers, env_updates = python_env_blockers(compose_env, repo)
+    env.update(env_updates)
+    compose_env.update(env_updates)
     old_tasks = owned_training_processes()
     print("Existing training processes owned by this account:")
     if old_tasks:
@@ -534,6 +597,7 @@ def main():
                 "tmpdir": env["TMPDIR"], "ray_tmpdir": env["RAY_TMPDIR"],
                 "ray_temp_fstype": temp_fstype, "ray_temp_disk_free_gib_at_launch": temp_disk.free / GIB,
                 "ignored_pythonpath": ignored_pythonpath,
+                "dropped_sys_path": env.get("BASELINE_DROP_SYS_PATH", ""),
                 "source_sha256": {f: sha256(repo / f) for f in source_files},
                 "gpu_visibility": env["CUDA_VISIBLE_DEVICES"], "prompt_examples": examples,
                 "model_config": json.loads((root / "models/Qwen2.5-Math-7B/config.json").read_text())}
