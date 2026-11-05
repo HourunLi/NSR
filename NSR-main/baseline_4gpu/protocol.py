@@ -54,10 +54,20 @@ def dataset_path(root: Path, filename: str):
     return candidates[0]
 
 
-def settings(root: Path, run_dir: Path, n_gpus: int = 4):
+LAYOUTS = {(2, 1), (4, 1), (8, 1), (8, 4)}
+
+
+def default_nnodes(n_gpus: int) -> int:
+    """Historical default: --n-gpus 8 meant the author 4-node x 8-GPU (32-GPU) layout."""
+    return 4 if n_gpus == 8 else 1
+
+
+def settings(root: Path, run_dir: Path, n_gpus: int = 4, nnodes=None):
     """Explicit overrides; no hidden repeated runs and no unrecorded fast-mode flags."""
-    if n_gpus not in (2, 4, 8):
-        raise ValueError("This launcher supports 2/4 GPUs locally, or 8 GPUs per node across 4 nodes")
+    nnodes = default_nnodes(n_gpus) if nnodes is None else nnodes
+    if (n_gpus, nnodes) not in LAYOUTS:
+        raise ValueError("Supported layouts: 2, 4 or 8 GPUs on one node, or 8 GPUs per node across 4 nodes; "
+                         f"got {n_gpus} GPUs x {nnodes} nodes")
     return {
         # Paper B.1/B.2/B.3; prompt length/truncation/gen batch from author script.
         "data.train_files": str(dataset_path(root, "dapo-math-17k.parquet")),
@@ -143,7 +153,7 @@ def settings(root: Path, run_dir: Path, n_gpus: int = 4):
         "trainer.project_name": "DAPO-paper-aligned",
         "trainer.experiment_name": run_dir.name,
         "trainer.n_gpus_per_node": n_gpus,
-        "trainer.nnodes": 4 if n_gpus == 8 else 1,
+        "trainer.nnodes": nnodes,
         "trainer.val_before_train": True,
         "trainer.test_freq": 5,
         "trainer.save_freq": 300,
@@ -159,8 +169,8 @@ def settings(root: Path, run_dir: Path, n_gpus: int = 4):
     }
 
 
-def hydra_args(root, run_dir, n_gpus=4):
+def hydra_args(root, run_dir, n_gpus=4, nnodes=None):
     return [
         f"{key}={json.dumps(value, ensure_ascii=False)}"
-        for key, value in settings(root, run_dir, n_gpus=n_gpus).items()
+        for key, value in settings(root, run_dir, n_gpus=n_gpus, nnodes=nnodes).items()
     ]
