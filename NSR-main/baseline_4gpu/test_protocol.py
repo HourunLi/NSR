@@ -3,6 +3,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import contextlib
+import io
+
+from .launch import cluster_blockers, describe_existing_run, existing_run_plan
 from .protocol import SYSTEM_PROMPT, dataset_path, hydra_args, settings, validate_aime_rows, with_answer_system
 from .report import pass_at_k, summarize
 
@@ -111,6 +115,61 @@ class ProtocolTests(unittest.TestCase):
     def test_invalid_gpu_count_rejected(self):
         with self.assertRaises(ValueError):
             settings(Path("/tmp/root"), Path("/tmp/run"), n_gpus=3)
+        with self.assertRaises(ValueError):
+            settings(self.root, self.root / "run", n_gpus=4, nnodes=4)
+
+    def test_eight_gpu_layouts(self):
+        run = self.root / "paper-runs/test"
+        four = settings(self.root, run, n_gpus=4)
+        author = settings(self.root, run, n_gpus=8)
+        single = settings(self.root, run, n_gpus=8, nnodes=1)
+        self.assertEqual((author["trainer.n_gpus_per_node"], author["trainer.nnodes"]), (8, 4))
+        self.assertEqual((single["trainer.n_gpus_per_node"], single["trainer.nnodes"]), (8, 1))
+        self.assertEqual({key for key in four if four[key] != single[key]}, {"trainer.n_gpus_per_node"})
+        self.assertIn("trainer.nnodes=1", hydra_args(self.root, run, n_gpus=8, nnodes=1))
+
+    def test_cluster_check_matches_verl_pool(self):
+        def nodes(*gpus, available=None):
+            return {"nodes": [{"host": f"10.0.0.{i}", "alive": True, "gpus": g} for i, g in enumerate(gpus)],
+                    "available_gpus": sum(gpus) if available is None else available}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cluster_blockers(nodes(8, 8, 8, 8), 8, 4), [])
+            self.assertEqual(len(cluster_blockers(nodes(8), 8, 4)), 2)
+            self.assertEqual(len(cluster_blockers(nodes(8, 8, 8, 4), 8, 4)), 2)
+            self.assertEqual(len(cluster_blockers(nodes(8, 8, 8, 8, available=24), 8, 4)), 1)
+            dead = nodes(8, 8, 8, 8)
+            dead["nodes"][0]["alive"] = False
+            self.assertEqual(len(cluster_blockers(dead, 8, 4)), 1)
+
+    def test_existing_run_is_described_not_modified(self):
+        run = self.root / "paper-runs/old"
+        (run / "checkpoints/global_step_20").mkdir(parents=True)
+        (run / "train.log").write_text("\n".join(f"line {i}" for i in range(100)) + "\nValueError: boom\n")
+        before = sorted(str(path) for path in run.rglob("*"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            describe_existing_run(run)
+        self.assertIn("global_step_20", out.getvalue())
+        self.assertIn("ValueError: boom", out.getvalue())
+        self.assertNotIn("line 50", out.getvalue())
+        self.assertEqual(sorted(str(path) for path in run.rglob("*")), before)
+
+    def test_existing_run_overwrite_policy(self):
+        runs = self.root / "paper-runs"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(existing_run_plan(runs / "new", overwrite=False), (False, None))
+            failed = runs / "failed"
+            failed.mkdir(parents=True)
+            (failed / "train.log").write_text("Traceback\n")
+            self.assertEqual(existing_run_plan(failed, overwrite=False), (True, None))
+            done = runs / "done"
+            (done / "checkpoints/global_step_300").mkdir(parents=True)
+            replace, blocker = existing_run_plan(done, overwrite=False)
+            self.assertFalse(replace)
+            self.assertIn("--overwrite", blocker)
+            self.assertEqual(existing_run_plan(done, overwrite=True), (True, None))
+            (runs / "file").write_text("x")
+            self.assertFalse(existing_run_plan(runs / "file", overwrite=True)[0])
 
     def test_pass_estimator(self):
         self.assertEqual(pass_at_k(32, 0, 16), 0)

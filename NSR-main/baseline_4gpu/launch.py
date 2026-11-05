@@ -12,7 +12,8 @@ import subprocess
 import sys
 import traceback
 
-from .protocol import SYSTEM_PROMPT, dataset_path, hydra_args, settings, validate_aime_rows, with_answer_system
+from .protocol import (LAYOUTS, SYSTEM_PROMPT, dataset_path, default_nnodes, hydra_args, settings,
+                       validate_aime_rows, with_answer_system)
 
 GIB = 1024 ** 3
 MIN_FREE_GIB = 300  # Conservative budget for two full checkpoints, exports and working files.
@@ -33,13 +34,13 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def environment(root, repo, name, n_gpus):
+def environment(root, repo, name, n_gpus, nnodes):
     env = os.environ.copy()
-    if n_gpus != 8:
-        env.pop("RAY_ADDRESS", None)  # Local 2/4-GPU mode starts its own Ray.
+    if nnodes == 1:
+        env.pop("RAY_ADDRESS", None)  # Single-node mode starts its own local Ray.
     env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
     env.update({
-        "NSR_ROOT": str(root), "VERL_HOME": str(root), "N_GPUS": str(n_gpus), "NNODES": "4" if n_gpus == 8 else "1",
+        "NSR_ROOT": str(root), "VERL_HOME": str(root), "N_GPUS": str(n_gpus), "NNODES": str(nnodes),
         "PYTHONUNBUFFERED": "1", "HYDRA_FULL_ERROR": "1",
         "PYTHONPATH": str(repo) + os.pathsep + env.get("PYTHONPATH", ""),
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
@@ -132,6 +133,80 @@ def gpu_status(env, n_gpus):
     return busy
 
 
+RAY_PROBE = """
+import json, ray
+ray.init(address="auto", logging_level="ERROR", log_to_driver=False)
+nodes = [{"host": n.get("NodeManagerAddress"), "alive": bool(n.get("Alive")),
+          "gpus": float(n.get("Resources", {}).get("GPU", 0))} for n in ray.nodes()]
+print(json.dumps({"nodes": nodes, "available_gpus": float(ray.available_resources().get("GPU", 0))}))
+ray.shutdown()
+"""
+
+
+def cluster_blockers(info, n_gpus, nnodes):
+    """Mirror verl's resource-pool check so a run that cannot get its GPUs is refused before mkdir."""
+    alive = [node for node in info["nodes"] if node["alive"]]
+    for node in alive:
+        print(f"Ray node {node['host']}: {node['gpus']:g} GPUs")
+    big_enough = [node for node in alive if node["gpus"] >= n_gpus]
+    need = n_gpus * nnodes
+    blockers = []
+    if len(big_enough) < nnodes:
+        blockers.append(f"Ray cluster has {len(big_enough)} alive node(s) with >= {n_gpus} GPUs; "
+                        f"{nnodes}-node mode needs {nnodes} ({need} GPUs total). "
+                        "For one 8-GPU machine use --n-gpus 8 --nnodes 1")
+    if info["available_gpus"] < need:
+        blockers.append(f"Ray cluster has {info['available_gpus']:g} free GPUs; this layout needs {need}")
+    return blockers
+
+
+def ray_cluster_blockers(env, n_gpus, nnodes):
+    """Connect to the existing Ray cluster (never starts one) and check it can host the run."""
+    print(f"Multi-node mode: {nnodes} nodes x {n_gpus} GPUs; RAY_ADDRESS={env.get('RAY_ADDRESS', '(unset)')}")
+    try:
+        result = subprocess.run([sys.executable, "-c", RAY_PROBE], env=env, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except subprocess.TimeoutExpired:
+        return ["Timed out connecting to the Ray cluster for multi-node mode"]
+    lines = result.stdout.strip().splitlines()
+    if result.returncode or not lines:
+        print(result.stderr[-2000:], file=sys.stderr)
+        return [f"No reachable Ray cluster for {nnodes}-node mode (start it with `ray start` on every node "
+                "first). For one 8-GPU machine use --n-gpus 8 --nnodes 1"]
+    return cluster_blockers(json.loads(lines[-1]), n_gpus, nnodes)
+
+
+def describe_existing_run(run_dir, tail_bytes=16 * 1024, tail_lines=30):
+    """Show why a previous attempt in this directory stopped; read-only. Returns saved checkpoint names."""
+    print(f"Existing experiment directory: {run_dir}")
+    checkpoints = sorted(path.name for path in (run_dir / "checkpoints").glob("global_step_*"))
+    print("  saved checkpoints:", ", ".join(checkpoints) or "none")
+    log = run_dir / "train.log"
+    if not log.is_file():
+        print("  no train.log (the previous attempt stopped before training started)")
+        return checkpoints
+    with log.open("rb") as stream:
+        stream.seek(max(0, log.stat().st_size - tail_bytes))
+        lines = stream.read().decode("utf-8", errors="replace").splitlines()[-tail_lines:]
+    print(f"  last {len(lines)} lines of {log}:")
+    for line in lines:
+        print("  | " + line)
+    return checkpoints
+
+
+def existing_run_plan(run_dir, overwrite):
+    """Return (replace, blocker). Failed attempts (no checkpoint) are replaced; saved checkpoints need --overwrite."""
+    if not run_dir.exists() and not run_dir.is_symlink():
+        return False, None
+    if run_dir.is_symlink() or not run_dir.is_dir():
+        return False, f"{run_dir} exists but is not a plain directory; remove it yourself"
+    checkpoints = describe_existing_run(run_dir)
+    if checkpoints and not overwrite:
+        return False, (f"{run_dir} holds saved checkpoints ({', '.join(checkpoints)}); "
+                       "add --overwrite to delete it and train again, or use a new --name")
+    return True, None
+
+
 def owned_training_processes():
     """Return this user's other active DAPO/Ray training processes, excluding this launcher's ancestry."""
     raw = subprocess.check_output(
@@ -164,7 +239,18 @@ def main():
     parser.add_argument("--name", default="DAPO7B-paper4-v2")
     parser.add_argument(
         "--n-gpus", type=int, choices=(2, 4, 8), default=4,
-        help="Number of GPUs on this one node. Global/mini batch and rollout count are unchanged.",
+        help="GPUs per node. Global/mini batch and rollout count are unchanged.",
+    )
+    parser.add_argument(
+        "--nnodes", type=int, choices=(1, 4), default=None,
+        help="Ray nodes. Default: 4 with --n-gpus 8 (author 32-GPU layout; needs a running multi-node Ray "
+             "cluster reached via RAY_ADDRESS), otherwise 1. Use --n-gpus 8 --nnodes 1 for one 8-GPU machine.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Also replace an existing experiment directory that holds saved checkpoints. A directory from a "
+             "failed attempt (logs, no checkpoint) is always replaced. Never resumes.",
     )
     parser.add_argument(
         "--skip-disk-check",
@@ -179,13 +265,16 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", args.name):
         parser.error("Use a simple experiment name of at most 64 characters")
+    nnodes = default_nnodes(args.n_gpus) if args.nnodes is None else args.nnodes
+    if (args.n_gpus, nnodes) not in LAYOUTS:
+        parser.error(f"Unsupported layout --n-gpus {args.n_gpus} --nnodes {nnodes}; 4 nodes require --n-gpus 8")
     repo = Path(__file__).resolve().parent.parent
     if not (repo / "recipe/dapo/main_dapo.py").is_file():
         raise ValueError("Place the baseline_4gpu folder directly inside NSR-main before running")
     root = Path(os.environ.get("NSR_ROOT", "/home/lihourun/hsc/NSR-work")).resolve()
     runs = Path(os.environ.get("BASELINE_RUNS", str(root / "paper-runs"))).resolve()
     run_dir = runs / args.name
-    env = environment(root, repo, args.name, args.n_gpus)
+    env = environment(root, repo, args.name, args.n_gpus, nnodes)
     # The preflight itself does not allocate model weights on GPUs or start Ray.
     # Existing TMPDIR may be missing, so use the inherited temp configuration for this stage.
     examples = check_data(root)
@@ -201,7 +290,7 @@ def main():
     print("Installed versions:", json.dumps(versions))
     cmd = [
         sys.executable, "-u", "-m", "recipe.dapo.main_dapo",
-        *hydra_args(root, run_dir, n_gpus=args.n_gpus),
+        *hydra_args(root, run_dir, n_gpus=args.n_gpus, nnodes=nnodes),
     ]
     # Validate against the user's installed Hydra/config version without starting training.
     compose_env = dict(env)
@@ -228,8 +317,11 @@ def main():
     print(f"Runtime filesystem: {runtime_disk.free/GIB:.1f} GiB free")
     print(f"New experiment: {run_dir}")
     print("Selected GPUs busy:", busy or "none")
-    print(f"This is one fresh 300-step run on {args.n_gpus} GPUs. It is NOT three independent replications.")
+    print(f"This is one fresh 300-step run on {nnodes} node(s) x {args.n_gpus} GPUs = {nnodes * args.n_gpus} GPUs. "
+          "It is NOT three independent replications.")
     blockers = []
+    if nnodes > 1:
+        blockers.extend(ray_cluster_blockers(compose_env, args.n_gpus, nnodes))
     if old_tasks:
         blockers.append("This account already has another DAPO/Ray training process")
     disk_warnings = []
@@ -248,8 +340,11 @@ def main():
         print("UNSAFE OVERRIDE: selected-GPU occupancy checks are explicitly skipped.")
         if busy:
             print("GPU WARNING (ignored by launcher): selected GPUs already have allocations:", busy)
-    if run_dir.exists():
-        blockers.append("Experiment directory already exists; this fresh-run launcher never overwrites or resumes it")
+    replace_existing, existing_blocker = existing_run_plan(run_dir, args.overwrite)
+    if existing_blocker:
+        blockers.append(existing_blocker)
+    elif replace_existing:
+        print(f"OVERWRITE: {run_dir} will be deleted and replaced by a fresh run once all checks pass")
     if not os.access(existing_parent(runs), os.W_OK):
         blockers.append("Checkpoint parent directory is not writable")
     if args.action == "check":
@@ -262,14 +357,17 @@ def main():
         blockers.append("Selected GPUs have existing processes/memory allocations; no processes will be stopped")
     if blockers:
         raise RuntimeError("; ".join(blockers))
+    if replace_existing:
+        shutil.rmtree(run_dir)
+        print(f"Deleted previous experiment directory: {run_dir}", flush=True)
     run_dir.mkdir(parents=True, exist_ok=False)
     for key in ("TMPDIR", "RAY_TMPDIR", "HF_HOME", "HF_DATASETS_CACHE", "TORCH_HOME", "VLLM_CACHE_ROOT", "XDG_CACHE_HOME", "CUDA_CACHE_PATH", "TRITON_CACHE_DIR"):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     (run_dir / "resolved.yaml").write_text(result.stdout, encoding="utf-8")
     source_files = ["recipe/dapo/main_dapo.py", "recipe/dapo/dapo_ray_trainer.py", "verl/workers/fsdp_workers.py",
                     "verl/workers/actor/dp_actor.py", "verl/utils/reward_score/math_dapo.py", "verl/trainer/ppo/core_algos.py"]
-    manifest = {"settings": settings(root, run_dir, n_gpus=args.n_gpus), "versions": versions, "command": cmd,
-                "n_gpus": args.n_gpus,
+    manifest = {"settings": settings(root, run_dir, n_gpus=args.n_gpus, nnodes=nnodes), "versions": versions,
+                "command": cmd, "n_gpus": args.n_gpus, "nnodes": nnodes,
                 "disk_check_skipped": args.skip_disk_check,
                 "gpu_check_skipped": args.skip_gpu_check,
                 "busy_selected_gpus_at_launch": busy,

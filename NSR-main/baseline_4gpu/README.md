@@ -101,6 +101,16 @@ python -u -m baseline_4gpu.launch check \
   --skip-disk-check
 ```
 
+八卡有两种布局，必须分清：
+
+- `--n-gpus 8`（默认 `--nnodes 4`）是作者脚本的 4 节点 × 8 卡 = 32 卡布局。它通过 `RAY_ADDRESS` 连接**已在 4 台机器上 `ray start` 好的** Ray 集群。启动器会先连接该集群核对 4 个各有 ≥8 卡的存活节点和 32 张空闲 GPU，不满足时在创建实验目录之前就拒绝，不会再留下一个失败的空目录。
+- `--n-gpus 8 --nnodes 1` 是单机 8 卡：与四卡相同，在本机自行启动 Ray，并忽略 `RAY_ADDRESS`。只有 `trainer.n_gpus_per_node` 变为 8，batch 等参数不变。
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+python -u -m baseline_4gpu.launch check --name DAPO7B-paper8-run1 --n-gpus 8 --nnodes 1
+```
+
 两卡只改变 `trainer.n_gpus_per_node=2`、`N_GPUS=2` 和可见GPU数量校验。全局batch512、mini-batch32、rollout.n16、SP2、TP1及300步均保持不变。因此每张卡承担更多工作，墙钟时间通常显著长于四卡；不要为了加速检查而把论文batch等参数减半。
 
 它检查本地模型文件、上下文长度、实际数据集适配方法、验证重复次数、评分器、你服务器安装的 Hydra 配置接口和空间。不加载7B权重到GPU，不启动Ray训练。只读取一条训练样本及验证文件，不扫描整个训练集的每条提示词；模型分片检查是存在性/非空检查，不是15GB文件的完整性校验。
@@ -176,7 +186,7 @@ nohup python -u -m baseline_4gpu.launch run \
 tail -n 100 -f "$NSR_ROOT/paper-runs/DAPO7B-paper4-v2/train.log"
 ```
 
-使用 `BASELINE_RUNS` 时相应调整路径。此启动器只接受新实验目录；同名目录已存在时拒绝覆盖，也不会偷偷 resume。重跑先保存失败日志，再换一个明确的新 `--name`。
+使用 `BASELINE_RUNS` 时相应调整路径。同名实验目录已存在时，启动器先打印其中的 checkpoint 和 `train.log` 末尾 30 行，然后在全部检查通过后**删除整个旧目录并从头训练**（不 resume）。没有任何 checkpoint 的失败目录直接覆盖；已有 `checkpoints/global_step_*`（即跑完过的实验）时需要显式加 `--overwrite` 才会删除。任何检查未通过时旧目录保持不动。
 
 日志开头应出现：NSR=False、total_training_steps=300、n_gpus_per_node=4、val_kwargs.n=1、gpu_memory_utilization=0.6、学习率warmup=0。先初始验证，之后才开始训练；这不是卡住的充分证据。
 
