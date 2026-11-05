@@ -17,6 +17,11 @@ from .protocol import (LAYOUTS, SYSTEM_PROMPT, dataset_path, default_nnodes, hyd
 
 GIB = 1024 ** 3
 MIN_FREE_GIB = 300  # Conservative budget for two full checkpoints, exports and working files.
+# Ray and vLLM talk over Unix sockets inside their temp dirs; these filesystems cannot host them reliably.
+SOCKETLESS_FS = ("fuse", "nfs", "cifs", "smb", "9p", "ceph", "glusterfs")
+# Ray appends "/ray/session_<date>_<time>_<usec>_<pid>/sockets/plasma_store" (about 69 characters)
+# and Linux limits a Unix socket path to 107 bytes.
+MAX_RAY_TMPDIR_CHARS = 38
 
 
 def existing_parent(path):
@@ -34,15 +39,57 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def mount_fstype(path, mounts_text=None):
+    """Filesystem type of the mount that holds path (longest matching mount point in /proc/mounts)."""
+    if mounts_text is None:
+        try:
+            mounts_text = Path("/proc/mounts").read_text()
+        except OSError:
+            return "unknown"
+    path = str(path)
+    best, fstype = -1, "unknown"
+    for line in mounts_text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        point = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), parts[1])
+        prefix = point.rstrip("/")
+        if (path == point or path.startswith(prefix + "/")) and len(prefix) > best:
+            best, fstype = len(prefix), parts[2]
+    return fstype
+
+
+def socket_capable(fstype):
+    return not fstype.startswith(SOCKETLESS_FS)
+
+
+def temp_dirs(root, name):
+    """TMPDIR and RAY_TMPDIR next to NSR_ROOT, unless that filesystem cannot host Unix sockets."""
+    key = hashlib.sha256(name.encode()).hexdigest()[:8]
+    base, note = root.parent, None
+    override = os.environ.get("BASELINE_LOCAL_TMP")
+    if override:
+        base = Path(override).resolve()
+    else:
+        fstype = mount_fstype(existing_parent(base))
+        if not socket_capable(fstype):
+            base = Path("/tmp")
+            note = (f"{root.parent} is on {fstype}, which cannot host Ray/vLLM Unix sockets; "
+                    f"temp dirs go under {base} (set BASELINE_LOCAL_TMP to choose another local disk)")
+    return base / "tp", base / "rp" / key, note
+
+
 def environment(root, repo, name, n_gpus, nnodes):
     env = os.environ.copy()
+    tmpdir, ray_tmpdir, _ = temp_dirs(root, name)
     if nnodes == 1:
         env.pop("RAY_ADDRESS", None)  # Single-node mode starts its own local Ray.
     env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
     env.update({
         "NSR_ROOT": str(root), "VERL_HOME": str(root), "N_GPUS": str(n_gpus), "NNODES": str(nnodes),
         "PYTHONUNBUFFERED": "1", "HYDRA_FULL_ERROR": "1",
-        "PYTHONPATH": str(repo) + os.pathsep + env.get("PYTHONPATH", ""),
+        # Inherited entries can shadow installed packages (e.g. a vendored grpc), which kills Ray's agents.
+        "PYTHONPATH": str(repo),
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "HF_HOME": str(root / "cache/huggingface"),
         "HF_DATASETS_CACHE": str(root / "cache/huggingface/datasets"),
@@ -51,8 +98,8 @@ def environment(root, repo, name, n_gpus, nnodes):
         "CUDA_CACHE_PATH": str(root / "cache/cuda"),
         "TRITON_CACHE_DIR": str(root / "cache/triton"),
         "XDG_CACHE_HOME": str(root / "cache/xdg"),
-        "TMPDIR": str(root.parent / "tp"),
-        "RAY_TMPDIR": str(root.parent / "rp" / hashlib.sha256(name.encode()).hexdigest()[:8]),
+        "TMPDIR": str(tmpdir),
+        "RAY_TMPDIR": str(ray_tmpdir),
         "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
         "CUDA_VISIBLE_DEVICES": env.get("CUDA_VISIBLE_DEVICES", "0,1,2,3"),
     })
@@ -131,6 +178,36 @@ def gpu_status(env, n_gpus):
         if uuid in apps or float(used) > 512:
             busy.append(index)
     return busy
+
+
+ENV_PROBE = """
+import grpc
+from grpc._cython import cygrpc
+print(grpc.__file__)
+"""
+
+
+def python_env_blockers(env, repo):
+    """Ray's dashboard and per-node agent import grpc; if that fails the raylet exits and ray.init times out."""
+    result = subprocess.run([sys.executable, "-c", ENV_PROBE], cwd=repo, env=env, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    if result.returncode:
+        print(result.stderr[-2000:], file=sys.stderr)
+        return ["grpc does not import in the training environment (see traceback above), so Ray's agent dies "
+                "and the node never starts. Remove the shadowing path from site-packages *.pth / user site"]
+    print("grpc:", result.stdout.strip())
+    return []
+
+
+def owned_ray_processes():
+    """This account's running Ray head/node processes; a plain ray.init() would attach to them."""
+    raw = subprocess.check_output(["ps", "-u", str(os.getuid()), "-o", "pid=,args="], text=True)
+    found = []
+    for line in raw.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and Path(parts[1].split()[0]).name in ("gcs_server", "raylet"):
+            found.append((int(parts[0]), parts[1]))
+    return found
 
 
 RAY_PROBE = """
@@ -275,6 +352,13 @@ def main():
     runs = Path(os.environ.get("BASELINE_RUNS", str(root / "paper-runs"))).resolve()
     run_dir = runs / args.name
     env = environment(root, repo, args.name, args.n_gpus, nnodes)
+    ignored_pythonpath = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    if ignored_pythonpath:
+        print("Not passing inherited PYTHONPATH to training:", os.pathsep.join(ignored_pythonpath))
+    _, _, temp_note = temp_dirs(root, args.name)
+    if temp_note:
+        print("NOTE:", temp_note)
+    print(f"TMPDIR={env['TMPDIR']}  RAY_TMPDIR={env['RAY_TMPDIR']}")
     # The preflight itself does not allocate model weights on GPUs or start Ray.
     # Existing TMPDIR may be missing, so use the inherited temp configuration for this stage.
     examples = check_data(root)
@@ -302,6 +386,7 @@ def main():
         print(result.stderr, file=sys.stderr)
         raise RuntimeError("Hydra configuration check failed; nothing has been launched")
     print("Hydra configuration: OK")
+    env_blockers = python_env_blockers(compose_env, repo)
     old_tasks = owned_training_processes()
     print("Existing training processes owned by this account:")
     if old_tasks:
@@ -313,15 +398,37 @@ def main():
     free = shutil.disk_usage(existing_parent(runs)).free / GIB
     runtime_disk = shutil.disk_usage(existing_parent(root))
     runtime_ok = runtime_disk.free >= max(20 * GIB, runtime_disk.total * 0.06)
+    temp_parent = existing_parent(Path(env["RAY_TMPDIR"]))
+    temp_fstype = mount_fstype(temp_parent)
+    temp_disk = shutil.disk_usage(temp_parent)
+    temp_ok = temp_disk.free >= max(20 * GIB, temp_disk.total * 0.06)
     print(f"Checkpoint filesystem: {free:.1f} GiB free; conservative launch budget: {MIN_FREE_GIB} GiB")
     print(f"Runtime filesystem: {runtime_disk.free/GIB:.1f} GiB free")
+    print(f"Ray/temp filesystem ({temp_fstype}): {temp_disk.free/GIB:.1f} GiB free under {temp_parent}")
+    try:
+        print(f"/dev/shm: {shutil.disk_usage('/dev/shm').free/GIB:.1f} GiB free (Ray object store, NCCL)")
+    except OSError:
+        print("/dev/shm: not available")
     print(f"New experiment: {run_dir}")
     print("Selected GPUs busy:", busy or "none")
     print(f"This is one fresh 300-step run on {nnodes} node(s) x {args.n_gpus} GPUs = {nnodes * args.n_gpus} GPUs. "
           "It is NOT three independent replications.")
-    blockers = []
+    blockers = list(env_blockers)
+    if not socket_capable(temp_fstype):
+        blockers.append(f"Ray/temp dir {env['RAY_TMPDIR']} is on {temp_fstype}, which cannot host Unix sockets; "
+                        "set BASELINE_LOCAL_TMP to a local-disk directory")
+    if len(env["RAY_TMPDIR"]) > MAX_RAY_TMPDIR_CHARS:
+        blockers.append(f"RAY_TMPDIR {env['RAY_TMPDIR']} is longer than {MAX_RAY_TMPDIR_CHARS} characters; Ray's "
+                        "socket paths would exceed the 107-byte Unix limit. Use a shorter BASELINE_LOCAL_TMP")
     if nnodes > 1:
         blockers.extend(ray_cluster_blockers(compose_env, args.n_gpus, nnodes))
+    else:
+        stale_ray = owned_ray_processes()
+        for pid, command in stale_ray:
+            print(f"  Ray process PID {pid}: {command[:160]}")
+        if stale_ray:
+            blockers.append("A Ray instance is already running for this account; single-node training would attach "
+                            "to it instead of starting a clean one. If it is left over, run `ray stop` first")
     if old_tasks:
         blockers.append("This account already has another DAPO/Ray training process")
     disk_warnings = []
@@ -329,6 +436,8 @@ def main():
         disk_warnings.append("Not enough conservative headroom for two complete saved checkpoints")
     if not runtime_ok:
         disk_warnings.append("Runtime/cache filesystem needs at least 20 GiB and 6% available")
+    if not temp_ok:
+        disk_warnings.append(f"Ray/temp filesystem {temp_parent} needs at least 20 GiB and 6% available")
     if args.skip_disk_check:
         print("UNSAFE OVERRIDE: launcher disk checks are explicitly skipped.")
         print("UNSAFE OVERRIDE: Ray disk monitoring and checkpoint writes remain enabled.")
@@ -373,6 +482,9 @@ def main():
                 "busy_selected_gpus_at_launch": busy,
                 "disk_free_gib_at_launch": free,
                 "runtime_disk_free_gib_at_launch": runtime_disk.free / GIB,
+                "tmpdir": env["TMPDIR"], "ray_tmpdir": env["RAY_TMPDIR"],
+                "ray_temp_fstype": temp_fstype, "ray_temp_disk_free_gib_at_launch": temp_disk.free / GIB,
+                "ignored_pythonpath": ignored_pythonpath,
                 "source_sha256": {f: sha256(repo / f) for f in source_files},
                 "gpu_visibility": env["CUDA_VISIBLE_DEVICES"], "prompt_examples": examples,
                 "model_config": json.loads((root / "models/Qwen2.5-Math-7B/config.json").read_text())}
