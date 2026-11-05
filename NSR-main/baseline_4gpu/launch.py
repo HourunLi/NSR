@@ -10,6 +10,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import traceback
 
 from .protocol import SYSTEM_PROMPT, hydra_args, settings, validate_aime_rows, with_answer_system
 
@@ -296,5 +297,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
+        traceback.print_exc()
         print(f"STOPPED: {type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(1)
