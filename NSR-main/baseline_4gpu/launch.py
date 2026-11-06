@@ -12,8 +12,8 @@ import subprocess
 import sys
 import traceback
 
-from .protocol import (LAYOUTS, SYSTEM_PROMPT, dataset_path, default_nnodes, hydra_args, settings,
-                       validate_aime_rows, with_answer_system)
+from .protocol import (LAYOUTS, MODEL_MAX_POSITIONS, MODEL_ROPE_THETA, REWARD_FILE, SYSTEM_PROMPT, dataset_path,
+                       default_nnodes, hydra_args, settings, validate_aime_rows, with_answer_system)
 
 GIB = 1024 ** 3
 MIN_FREE_GIB = 300  # Conservative budget for two full checkpoints, exports and working files.
@@ -116,6 +116,11 @@ def check_data(root):
 
     model = root / "models/Qwen2.5-Math-7B"
     config = AutoConfig.from_pretrained(model, local_files_only=True)
+    rope = (float(getattr(config, "rope_theta", 0)), config.max_position_embeddings, getattr(config, "rope_scaling", None))
+    if rope != (MODEL_ROPE_THETA, MODEL_MAX_POSITIONS, None):
+        raise ValueError(f"Model config has rope_theta/max_position_embeddings/rope_scaling = {rope}; this protocol "
+                         f"needs ({MODEL_ROPE_THETA:g}, {MODEL_MAX_POSITIONS}, None): run the config step in README.txt "
+                         "(the 4096-context base model produces garbage beyond ~4096 positions otherwise)")
     if config.model_type != "qwen2" or config.max_position_embeddings < 10240:
         raise ValueError("Need Qwen2 and model context >= 10240. No model config is changed by this launcher.")
     tokenizer = AutoTokenizer.from_pretrained(model, local_files_only=True)
@@ -125,7 +130,8 @@ def check_data(root):
         if not (model / filename).is_file() or (model / filename).stat().st_size == 0:
             raise ValueError(f"Missing/empty weight shard: {filename}")
     total = sum((model / filename).stat().st_size for filename in weights)
-    print(f"Model: {len(weights)} shards, {total/GIB:.2f} GiB, context={config.max_position_embeddings}")
+    print(f"Model: {len(weights)} shards, {total/GIB:.2f} GiB, context={config.max_position_embeddings}, "
+          f"rope_theta={config.rope_theta:g}")
     # Check the actual custom dataset method, without loading the full training dataset.
     adapter = object.__new__(AnswerFormatDataset)
     adapter.prompt_key, adapter.image_key, adapter.video_key = "prompt", "images", "videos"
@@ -556,6 +562,9 @@ def main():
         raise RuntimeError("Training environment is not usable: " + "; ".join(env_blockers))
     examples = check_data(root)
     score = runpy.run_path(str(repo / "verl/utils/reward_score/math_dapo.py"))["compute_score"]
+    boxed_score = runpy.run_path(str(REWARD_FILE))["compute_score"]
+    if not boxed_score("math_dapo", "so it is \\boxed{540}.", "540")["acc"]:
+        raise ValueError("Baseline scorer (reward.py) does not accept a \\boxed{} answer")
     if not score("Answer: 540", "540")["acc"]:
         raise ValueError("Installed reward scorer does not accept the expected Answer: format")
     versions = {}
@@ -665,7 +674,7 @@ def main():
     for key in ("TMPDIR", "RAY_TMPDIR", "HF_HOME", "HF_DATASETS_CACHE", "TORCH_HOME", "VLLM_CACHE_ROOT", "XDG_CACHE_HOME", "CUDA_CACHE_PATH", "TRITON_CACHE_DIR"):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     (run_dir / "resolved.yaml").write_text(result.stdout, encoding="utf-8")
-    source_files = ["recipe/dapo/main_dapo.py", "recipe/dapo/dapo_ray_trainer.py", "verl/workers/fsdp_workers.py",
+    source_files = ["baseline_4gpu/reward.py", "recipe/dapo/main_dapo.py", "recipe/dapo/dapo_ray_trainer.py", "verl/workers/fsdp_workers.py",
                     "verl/workers/actor/dp_actor.py", "verl/utils/reward_score/math_dapo.py", "verl/trainer/ppo/core_algos.py"]
     manifest = {"settings": settings(root, run_dir, n_gpus=args.n_gpus, nnodes=nnodes), "versions": versions,
                 "command": cmd, "n_gpus": args.n_gpus, "nnodes": nnodes,

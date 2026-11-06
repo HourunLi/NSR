@@ -32,32 +32,21 @@ hf download \
   --local-dir "/data/lihourun/NSR/models/Qwen2.5-Math-7B"
 
 
-#修改参数适配当前代码
+#修改参数适配当前代码：Qwen2.5-Math-7B 原生上下文 4096（rope_theta=10000）。只改 max_position_embeddings 会让 4096 之后的输出变成乱码，
+#因此把 rope_theta 改为 40000、max_position_embeddings 设为 16384（偏离基座模型，启动器会检查并记录在 manifest）；回答长度仍是 8192
 python - <<'PY'
 from pathlib import Path
 import json
 
-path = Path(
-    "/data/lihourun/NSR/"
-    "models/Qwen2.5-Math-7B/config.json"
-)
-
+path = Path("/data/lihourun/NSR/models/Qwen2.5-Math-7B/config.json")
 config = json.loads(path.read_text(encoding="utf-8"))
-old_value = config.get("max_position_embeddings")
-
-if old_value is None or old_value < 10240:
-    config["max_position_embeddings"] = 32768
-    path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-print(
-    "max_position_embeddings:",
-    old_value,
-    "->",
-    config["max_position_embeddings"],
-)
+old = (config.get("rope_theta"), config.get("max_position_embeddings"), config.get("rope_scaling"))
+config["rope_theta"] = 40000.0
+config["max_position_embeddings"] = 16384
+config.pop("rope_scaling", None)
+path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print("rope_theta, max_position_embeddings, rope_scaling:", old, "->",
+      (config["rope_theta"], config["max_position_embeddings"], config.get("rope_scaling")))
 PY
 
 

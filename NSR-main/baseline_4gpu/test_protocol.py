@@ -102,6 +102,32 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(512 // 32, 16)
         self.assertEqual(len(hydra_args(root, root / "test")), len(cfg))
 
+    def test_reward_answer_rule_with_boxed_fallback(self):
+        from .reward import compute_score
+        cases = [
+            ("so x = 204.\nAnswer: 204", "204", 1.0, 0.0),            # math_dapo rule unchanged
+            ("is:\n\\[\n\\boxed{204}\n\\]", "204", 1.0, 1.0),        # boxed-only answer now counts
+            ("thus \\boxed{\\frac{1}{2}}.", "\\frac{1}{2}", 1.0, 1.0),
+            ("hence \\boxed{25}.", "204", -1.0, 1.0),
+            ("\\boxed{204}\nAnswer: 25", "204", -1.0, 0.0),           # an Answer: line takes precedence
+            ("\\boxed{204}" + " filler" * 60, "204", -1.0, 0.0),     # same 300-character window as math_dapo
+            ("no final answer", "204", -1.0, 0.0),
+        ]
+        for text, gt, score, fallback in cases:
+            with self.subTest(text=text[:30]):
+                result = compute_score("math_dapo", text, gt)
+                self.assertEqual((result["score"], result["boxed_fallback"]), (score, fallback))
+                self.assertEqual(result["acc"], score > 0)
+
+    def test_reward_and_rope_settings(self):
+        from .protocol import MODEL_MAX_POSITIONS, MODEL_ROPE_THETA, REWARD_FILE
+        cfg = settings(self.root, self.root / "run")
+        self.assertEqual(cfg["custom_reward_function.path"], str(REWARD_FILE))
+        self.assertTrue(REWARD_FILE.is_file())
+        self.assertEqual(cfg["custom_reward_function.name"], "compute_score")
+        self.assertEqual((MODEL_ROPE_THETA, MODEL_MAX_POSITIONS), (40000.0, 16384))
+        self.assertGreaterEqual(MODEL_MAX_POSITIONS, cfg["data.max_prompt_length"] + cfg["data.max_response_length"])
+
     def test_two_gpu_changes_only_gpu_count(self):
         root = self.root
         run = root / "paper-runs/test"

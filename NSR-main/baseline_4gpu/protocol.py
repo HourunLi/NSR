@@ -56,6 +56,15 @@ def dataset_path(root: Path, filename: str):
 
 LAYOUTS = {(2, 1), (4, 1), (8, 1), (8, 4)}
 
+# Qwen2.5-Math-7B ships with a 4096-token context (rope_theta=10000). Only raising max_position_embeddings
+# left RoPE unchanged and responses turned to garbage beyond ~4096 positions (step-0 AIME run), so the
+# local config.json must use rope_theta=40000 with max_position_embeddings=16384 (README.txt). This is a
+# deviation from the base model, recorded in the manifest's model_config; responses stay at 8192 tokens.
+MODEL_ROPE_THETA = 40000.0
+MODEL_MAX_POSITIONS = 16384
+# "Answer:" scoring with a \boxed{} fallback; see reward.py and README.
+REWARD_FILE = Path(__file__).resolve().parent / "reward.py"
+
 
 def default_nnodes(n_gpus: int) -> int:
     """Historical default: --n-gpus 8 meant the author 4-node x 8-GPU (32-GPU) layout."""
@@ -146,6 +155,8 @@ def settings(root: Path, run_dir: Path, n_gpus: int = 4, nnodes=None):
         "algorithm.filter_groups.metric": "acc",
         "algorithm.filter_groups.max_num_gen_batches": 10,
         "reward_model.reward_manager": "dapo",
+        "custom_reward_function.path": str(REWARD_FILE),
+        "custom_reward_function.name": "compute_score",
         "reward_model.overlong_buffer.enable": True,
         "reward_model.overlong_buffer.len": 4096,
         "reward_model.overlong_buffer.penalty_factor": 1.0,

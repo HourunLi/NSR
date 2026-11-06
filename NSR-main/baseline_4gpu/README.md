@@ -30,7 +30,8 @@
 - **300×16 的实现解释**：此版代码每个外层 step 将训练批划分为 512/32=16 个 mini-batch，并分别执行更新。不要再凭论文的 “accumulation” 字样叠加一个额外的 16 倍参数。`trainer.total_epochs=3` 只是允许数据迭代器供应足够的批次，`total_training_steps=300` 才是停止上限；它不表示三次独立实验。动态筛选失败仍可能提前报错，脚本不保证无条件完成 300 步。
 - **AIME 重复采样修正**：你的验证文件是 960 行，即 30 题×每题重复32次，因此 `val_kwargs.n=1`，不再乘一次32。预检查要求这个文件结构；如更换为30行文件，不能继续用这个配置。
 - **提示词兼容修正**：用户提供的 tokenizer 自动 system 要求 boxed，而数据与 `math_dapo.py` 要求 `Answer:`。自定义数据集在内存里补一条明确的 `Answer:` system，保留原题和评分器。论文没有公开这条 system 的逐字内容，这不是“作者原提示词”。已有其他 system 时直接报错，不覆盖。
-- **上下文长度**：模型配置必须支持至少 2048+8192=10240。预检查会读取并记录你已修改过的本地模型配置，但不会自动改 config.json / RoPE。能通过长度检查不等于论文证明了某一种上下文扩展方案。
+- **上下文长度（偏离基座模型）**：Qwen2.5-Math-7B 原生上下文 4096（`rope_theta=10000`）。首次 8 卡运行只把 `max_position_embeddings` 改成 32768、RoPE 未变，step-0 AIME 验证里约 12/30 道题的全部回答都写到 8192 上限，超过约 4096 个位置后变成多语言乱码。现要求本地 `config.json` 为 `rope_theta=40000`、`max_position_embeddings=16384`、无 `rope_scaling`（README.txt 的配置步骤），预检查不符即拒绝，完整配置记入 manifest 的 `model_config`。回答长度仍为论文的 8192。论文未披露上下文扩展方式，这是此版实现的选择，不是作者设定。
+- **评分（偏离作者设定）**：`math_dapo` 只认最后 300 个字符里的 `Answer: x`。step-0 验证中 960 条回答 0 条写 `Answer:`，59% 用 `\boxed{}`、其中按标准答案 13.3% 正确，原评分全部 -1，DAPO 的组过滤因此没有可训练的题目。现用 `reward.py`（`custom_reward_function`）：最后 300 个字符里有 `Answer:` 时规则与 `math_dapo` 完全相同；没有时取其中最后一个 `\boxed{}`，用同样的归一化比对。提示词不变（仍要求 `Answer:`）。返回值多一个 `boxed_fallback`（1 表示由 `\boxed{}` 判定），会出现在验证和训练指标里，可据此看模型是否转向 `Answer:` 格式。`report.py` 用的 `acc` 也按此规则。
 - **其他未披露值**：生成 batch1536、prompt2048、overlong4096、weight_decay0.1、SP2/TP1、offload、eager 等来自作者脚本/仓库默认值。保留它们，不冒称每一项都见于论文。数据 shuffle seed1、vLLM seed0 是此版实现的默认值，不是作者公开的独立实验种子；不能保证逐位可复现。
 - **OOM修正**：第一版曾沿用作者脚本的 `gpu_memory_utilization=0.8`。实际四卡任务在完成约20个外层step后，于 `vLLM wake_up(tags=["kv_cache"])` 重新映射KV cache时OOM；因此本版改为 `0.60`。它不改变DAPO损失、batch、采样数、clip阈值或训练步数，但会减少KV cache并可能降低吞吐。它也不能防止其他用户在任务运行后重新占用同一GPU。
 - **输出管理**：日志改 console；保留最近两个完整 actor checkpoint。这是运行管理选择，不影响训练目标；框架会自动删除本次新实验目录内更旧的 checkpoint，不动旧实验目录。
