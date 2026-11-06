@@ -308,6 +308,7 @@ print(json.dumps({
     "dashboard_full": dashboard_full, "dashboard_failures": failures,
     "flash_attn": flash_version, "flash_error": flash_error, "torch": torch_info,
     "python_tag": f"cp{sys.version_info[0]}{sys.version_info[1]}",
+    "glibc": (os.confstr("CS_GNU_LIBC_VERSION") or "").replace("glibc ", ""),
     "shadowing": shadowing, "shadow_sources": shadow_sources,
     "sitecustomize": getattr(importlib.util.find_spec("sitecustomize"), "origin", None),
     "prefix": sys.prefix, "python": sys.executable}), flush=True)
@@ -335,9 +336,19 @@ def env_diagnosis(info):
         return ["The training-environment probe failed (see output above)"]
     blockers = ray_env_diagnosis(info)
     if info.get("flash_error"):
+        torch_version = info.get("torch", {}).get("version", "")
+        glibc = tuple(int(part) for part in re.findall(r"\d+", info.get("glibc") or "")[:2])
+        newer_torch = tuple(int(part) for part in re.findall(r"\d+", torch_version)[:2]) >= (2, 7)
         wheel = flash_attn_wheel(info)
-        hint = (f" Install the matching prebuilt wheel: {info['python']} -m pip install \"{wheel}\""
-                if wheel else f" torch: {info.get('torch')}")
+        if newer_torch and glibc and glibc < (2, 32):
+            hint = (f" Every prebuilt flash-attn wheel for torch >= 2.7 needs glibc 2.32 (symbol "
+                    f"__libc_single_threaded); this system has glibc {info['glibc']}. Use the reference env "
+                    "instead (manifests/requirements-reference.txt: Python 3.10, torch 2.6.0, flash-attn "
+                    f"{FLASH_ATTN_VERSION}, whose wheel needs only glibc 2.14), or build flash-attn from source")
+        elif wheel:
+            hint = f" Install the matching prebuilt wheel: {info['python']} -m pip install \"{wheel}\""
+        else:
+            hint = f" torch: {info.get('torch')}"
         blockers.append(f"flash-attn does not import ({info['flash_error']}); verl needs it (flash_attn.bert_padding, "
                         f"attn_implementation=flash_attention_2).{hint}")
     return blockers
@@ -571,6 +582,14 @@ def main():
     print(f"TMPDIR={env['TMPDIR']}  RAY_TMPDIR={env['RAY_TMPDIR']}")
     # The preflight itself does not allocate model weights on GPUs or start Ray.
     # Existing TMPDIR may be missing, so use the inherited temp configuration for this stage.
+    # Check the training environment first: a broken flash-attn or grpc breaks `import transformers`
+    # in this process too, and would otherwise surface as a raw traceback from the data check.
+    probe_env = dict(env)
+    probe_env.pop("TMPDIR", None)
+    env_blockers, env_updates = python_env_blockers(probe_env, repo)
+    env.update(env_updates)
+    if env_blockers:
+        raise RuntimeError("Training environment is not usable: " + "; ".join(env_blockers))
     examples = check_data(root)
     score = runpy.run_path(str(repo / "verl/utils/reward_score/math_dapo.py"))["compute_score"]
     if not score("Answer: 540", "540")["acc"]:
@@ -596,9 +615,6 @@ def main():
         print(result.stderr, file=sys.stderr)
         raise RuntimeError("Hydra configuration check failed; nothing has been launched")
     print("Hydra configuration: OK")
-    env_blockers, env_updates = python_env_blockers(compose_env, repo)
-    env.update(env_updates)
-    compose_env.update(env_updates)
     old_tasks = owned_training_processes()
     print("Existing training processes owned by this account:")
     if old_tasks:
@@ -625,7 +641,7 @@ def main():
     print("Selected GPUs busy:", busy or "none")
     print(f"This is one fresh 300-step run on {nnodes} node(s) x {args.n_gpus} GPUs = {nnodes * args.n_gpus} GPUs. "
           "It is NOT three independent replications.")
-    blockers = list(env_blockers)
+    blockers = []
     if not socket_capable(temp_fstype):
         blockers.append(f"Ray/temp dir {env['RAY_TMPDIR']} is on {temp_fstype}, which cannot host Unix sockets; "
                         "set BASELINE_LOCAL_TMP to a local-disk directory")

@@ -206,7 +206,7 @@ class ProtocolTests(unittest.TestCase):
                   "grpc_sources": ["/env/lib/python3.11/site-packages/modelarts.pth"],
                   "grpc_error": "ImportError: cannot import name 'cygrpc'", "grpc_in_env": False,
                   "grpcio": "1.80.0", "grpcio_dir": shadow, "dashboard_full": True, "dashboard_failures": [],
-                  "flash_attn": "2.7.4.post1", "flash_error": None, "python_tag": "cp311",
+                  "flash_attn": "2.7.4.post1", "flash_error": None, "python_tag": "cp311", "glibc": "2.35",
                   "torch": {"version": "2.7.0+cu126", "cuda": "12.6", "cxx11abi": True},
                   "prefix": "/env", "python": "/env/bin/python"}
         healthy = dict(broken, grpc="/env/lib/python3.11/site-packages/grpc/__init__.py", grpc_sources=[],
@@ -235,6 +235,11 @@ class ProtocolTests(unittest.TestCase):
                        python_tag="cp310")
         self.assertIn("cu12torch2.6cxx11abiFALSE-cp310-cp310", launch.env_diagnosis(old_abi)[0])
         self.assertEqual(len(launch.env_diagnosis(dict(broken, flash_attn=None, flash_error="x"))), 2)
+        # ModelArts node: torch 2.7 wheels need glibc 2.32, so point to the torch 2.6 reference env instead.
+        old_glibc = launch.env_diagnosis(dict(no_flash, glibc="2.31"))[0]
+        self.assertIn("requirements-reference.txt", old_glibc)
+        self.assertNotIn("releases/download", old_glibc)
+        self.assertIn("releases/download", launch.env_diagnosis(dict(old_abi, glibc="2.31"))[0])
 
     def test_pathfix_drops_listed_entries_only(self):
         import subprocess
