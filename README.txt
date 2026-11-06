@@ -6,6 +6,7 @@ conda create -y -n nsr-ref -c conda-forge python=3.10
 conda activate nsr-ref
 
 python -m pip install --no-deps -r "/data/lihourun/NSR/manifests/requirements-reference.txt"
+#也可以直接修复已有的 Python 3.11 环境 nsr：先 pip uninstall -y flash-attn，再在 nsr 里执行上面这条 pip install（会把 torch/vllm/ray/xformers 等改回参考版本）
 
 python -c "import torch, flash_attn, flash_attn_2_cuda, vllm, ray, grpc; from grpc._cython import cygrpc; print(torch.__version__, flash_attn.__version__, vllm.__version__, ray.__version__)"
 
