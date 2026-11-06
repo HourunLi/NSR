@@ -4,8 +4,8 @@
 #   - torch/torchvision/torchaudio without "+cu124": PyPI's 2.6.0 / 0.21.0 / 2.6.0 wheels are the CUDA 12.4
 #     builds (see the nvidia-*-cu12 12.4 pins), so no PyTorch index is needed;
 #   - pip and packaging come from conda (packaging==26.3 as in environment-no-builds.yml).
-#   - flash-attn is the same torch 2.6 build for Python 3.10 (reference) or 3.11, chosen by a marker.
-# Both flash-attn wheels only need glibc >= 2.14 (every torch 2.7 build needs glibc 2.32).
+#   - flash-attn is NOT in this file (it is not on PyPI mirrors; GitHub may be unreachable or intercepted):
+#     install it afterwards from requirements-flash-attn.txt or a downloaded wheel (see README.txt).
 # All other pins resolve to wheels for CPython 3.10 and 3.11 on manylinux_2_28 or older
 # (antlr4-python3-runtime is a pure-Python sdist).
 absl-py==2.5.0
@@ -47,8 +47,6 @@ fastapi-cloud-cli==0.23.0
 fastar==0.12.0
 fastrlock==0.8.3
 filelock==3.32.3
-flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1%2Bcu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl#sha256=ffe17686fa1a0f288de9eae7c32af209d32a27b037ef28614f042b377af5b15a ; python_version == "3.10"
-flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1%2Bcu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl#sha256=58853b28a5a926cae14402bfd8d4d93a45ebf8f9e79533f37ab09d0d77a99c05 ; python_version == "3.11"
 frozenlist==1.8.0
 fsspec==2024.12.0
 gguf==0.10.0

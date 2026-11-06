@@ -5,8 +5,17 @@ conda create -y -n nsr-ref -c conda-forge python=3.10
 
 conda activate nsr-ref
 
+#也可以直接修复已有的 Python 3.11 环境 nsr：先 pip uninstall -y flash-attn，再在 nsr 里执行下面两步（会把 torch/vllm/ray/xformers 等改回参考版本）
 python -m pip install --no-deps -r "/data/lihourun/NSR/manifests/requirements-reference.txt"
-#也可以直接修复已有的 Python 3.11 环境 nsr：先 pip uninstall -y flash-attn，再在 nsr 里执行上面这条 pip install（会把 torch/vllm/ray/xformers 等改回参考版本）
+
+#flash-attn 不在 PyPI 镜像上，单独从 GitHub 装（按 Python 版本自动选 cp310/cp311）
+python -m pip install --no-deps -r "/data/lihourun/NSR/manifests/requirements-flash-attn.txt"
+
+#若上一步报 SSL/证书错误：用 curl 或从别处下载同名 wheel，校验 sha256 后装本地文件（以 Python 3.11 为例；3.10 把 cp311 换成 cp310，哈希见 requirements-flash-attn.txt）
+mkdir -p "/data/lihourun/NSR/wheels" && cd "/data/lihourun/NSR/wheels"
+curl -fL -o "flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl" "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1%2Bcu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
+echo "58853b28a5a926cae14402bfd8d4d93a45ebf8f9e79533f37ab09d0d77a99c05  flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl" | sha256sum -c
+python -m pip install --no-deps "./flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
 
 python -c "import torch, flash_attn, flash_attn_2_cuda, vllm, ray, grpc; from grpc._cython import cygrpc; print(torch.__version__, flash_attn.__version__, vllm.__version__, ray.__version__)"
 

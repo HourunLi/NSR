@@ -343,7 +343,8 @@ def env_diagnosis(info):
         if newer_torch and glibc and glibc < (2, 32):
             hint = (f" Every prebuilt flash-attn wheel for torch >= 2.7 needs glibc 2.32 (symbol "
                     f"__libc_single_threaded); this system has glibc {info['glibc']}. Install the reference env "
-                    "pins instead (manifests/requirements-reference.txt, Python 3.10 or 3.11: torch 2.6.0, flash-attn "
+                    "pins instead (manifests/requirements-reference.txt + requirements-flash-attn.txt, Python 3.10 or "
+                    "3.11: torch 2.6.0, flash-attn "
                     f"{FLASH_ATTN_VERSION}, whose wheel needs only glibc 2.14), or build flash-attn from source")
         elif wheel:
             hint = f" Install the matching prebuilt wheel: {info['python']} -m pip install \"{wheel}\""
