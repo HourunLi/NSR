@@ -194,7 +194,8 @@ class ProtocolTests(unittest.TestCase):
         inherited = {"PYTHONPATH": "/modelarts/tools/visualization/tensorboard", "RAY_ADDRESS": "auto"}
         with mock.patch.dict(os.environ, inherited), mock.patch.object(launch, "mount_fstype", return_value="xfs"):
             env = launch.environment(Path("/data/lihourun/NSR"), repo, "run", 8, 1)
-            self.assertEqual(env["PYTHONPATH"], str(repo))
+            self.assertEqual(env["PYTHONPATH"], os.pathsep.join([str(repo), str(launch.PATHFIX_DIR)]))
+            self.assertEqual(env["BASELINE_ENV_ONLY"], "1")
             self.assertNotIn("RAY_ADDRESS", env)
             self.assertEqual(env["NNODES"], "1")
             self.assertEqual(env["PYTHONNOUSERSITE"], "1")
@@ -213,17 +214,16 @@ class ProtocolTests(unittest.TestCase):
                        grpc_entry="/env/lib/python3.11/site-packages", grpc_error=None, grpc_in_env=True)
         self.assertEqual(launch.env_diagnosis(healthy), [])
         # ModelArts case: the only grpc (and its grpcio metadata) lives outside the env.
-        missing = launch.env_diagnosis(broken)[0]
-        self.assertIn("/env/bin/python -m pip install --ignore-installed --no-deps grpcio", missing)
-        self.assertIn("modelarts.pth", missing)
-        self.assertIn("not in the env", missing)
-        shadowed = launch.env_diagnosis(dict(broken, grpc_in_env=True))[0]
-        self.assertIn("Remove that entry", shadowed)
+        missing = launch.env_diagnosis(dict(broken, grpc=None, grpc_error="ModuleNotFoundError: grpc"))[0]
+        self.assertIn("pip-env-only.sh install --no-deps grpcio==1.83.0", missing)
+        self.assertIn("has no grpc", missing)
+        broken_in_env = launch.env_diagnosis(dict(broken, grpc_in_env=True))[0]
+        self.assertIn("--force-reinstall grpcio==1.83.0", broken_in_env)
         # Minimal Ray (no dashboard deps) does not need grpc at all.
         absent = dict(broken, grpc=None, grpc_entry=None, grpc_sources=[], grpcio=None, grpcio_dir=None,
                       grpc_error="ModuleNotFoundError: No module named 'grpc'")
         self.assertEqual(launch.env_diagnosis(dict(absent, dashboard_full=False)), [])
-        self.assertIn("pip install", launch.env_diagnosis(absent)[0])
+        self.assertIn("pip-env-only.sh install", launch.env_diagnosis(absent)[0])
         failing = dict(healthy, dashboard_failures=["ray.dashboard.modules.x: ImportError: boom"])
         self.assertIn("ray.dashboard.modules.x", launch.env_diagnosis(failing)[0])
         self.assertEqual(len(launch.env_diagnosis(None)), 1)
@@ -241,18 +241,37 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("releases/download", old_glibc)
         self.assertIn("releases/download", launch.env_diagnosis(dict(old_abi, glibc="2.31"))[0])
 
-    def test_pathfix_drops_listed_entries_only(self):
+    def test_env_only_hides_startup_pth_entries(self):
+        """A .pth in the env adds an outside directory (as modelarts.pth does); env-only mode hides it."""
         import subprocess
         import sys
-        shadow = self.root / "modelarts"
-        (shadow / "grpc").mkdir(parents=True)
-        env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(launch.PATHFIX_DIR), str(shadow), str(self.root)]),
-                   BASELINE_DROP_SYS_PATH=str(shadow))
-        out = subprocess.run([sys.executable, "-c", "import json, sys; print(json.dumps(sys.path))"],
-                             env=env, capture_output=True, text=True, check=True).stdout
-        paths = json.loads(out)
-        self.assertNotIn(str(shadow), paths)
-        self.assertIn(str(self.root), paths)
+        import venv
+        env_dir, outside, extra = self.root / "env", self.root / "modelarts", self.root / "on_pythonpath"
+        try:
+            venv.EnvBuilder(with_pip=False).create(env_dir)
+        except Exception as exc:  # pragma: no cover - depends on the interpreter build
+            self.skipTest(f"cannot create a venv: {exc}")
+        python = env_dir / "bin" / "python"
+        site_dir = Path(subprocess.run([str(python), "-c", "import site; print(site.getsitepackages()[0])"],
+                                       capture_output=True, text=True, check=True).stdout.strip())
+        (outside / "grpc").mkdir(parents=True)
+        extra.mkdir()
+        (site_dir / "modelarts.pth").write_text(str(outside) + "\n")
+        show = ("import json, sys, sitecustomize; "
+                "print(json.dumps([sys.path, getattr(sitecustomize, 'BASELINE_HIDDEN', None)]))")
+        base = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "BASELINE_ENV_ONLY")}
+        base["PYTHONPATH"] = os.pathsep.join([str(launch.PATHFIX_DIR), str(extra)])
+        def run(**extra_env):
+            out = subprocess.run([str(python), "-c", show], env=dict(base, **extra_env),
+                                 capture_output=True, text=True, check=True).stdout
+            return json.loads(out)
+        paths, hidden = run()
+        self.assertIn(str(outside), paths)          # default: the .pth entry is visible
+        paths, hidden = run(BASELINE_ENV_ONLY="1")
+        self.assertNotIn(str(outside), paths)       # env-only: hidden
+        self.assertEqual(hidden, [str(outside)])
+        self.assertIn(str(extra), paths)            # PYTHONPATH entries stay
+        self.assertIn(str(site_dir), paths)         # the env's own site-packages stays
 
     def test_existing_run_overwrite_policy(self):
         runs = self.root / "paper-runs"

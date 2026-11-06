@@ -5,7 +5,7 @@ conda create -y -n nsr-ref -c conda-forge python=3.10
 
 conda activate nsr-ref
 
-#pip 一律经 pip-env-only.sh 运行：ModelArts 的 modelarts.pth 会把只读目录 /modelarts/tools/visualization/tensorboard（自带 Markdown、grpcio 等）加进 sys.path，直接用 pip 会去卸载那里的包而报 Read-only file system
+#pip 一律经 pip-env-only.sh 运行，训练启动器也用同一规则：只看得到本环境内安装的包，ModelArts 的 modelarts.pth 加入的只读目录 /modelarts/tools/visualization/tensorboard（自带 Markdown、grpcio 等）及继承的 PYTHONPATH 全部隐藏；缺什么直接报错，不借用外部版本
 #也可以直接修复已有的 Python 3.11 环境 nsr：先 pip uninstall -y flash-attn，再在 nsr 里执行下面两步（会把 torch/vllm/ray/xformers 等改回参考版本）
 bash /data/lihourun/NSR/manifests/pip-env-only.sh install --no-deps -r "/data/lihourun/NSR/manifests/requirements-reference.txt"
 

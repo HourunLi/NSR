@@ -88,10 +88,11 @@ def environment(root, repo, name, n_gpus, nnodes):
     env.update({
         "NSR_ROOT": str(root), "VERL_HOME": str(root), "N_GPUS": str(n_gpus), "NNODES": str(nnodes),
         "PYTHONUNBUFFERED": "1", "HYDRA_FULL_ERROR": "1",
-        # Inherited entries can shadow installed packages (e.g. a vendored grpc), which kills Ray's agents.
-        "PYTHONPATH": str(repo),
-        # User-site *.pth files are searched before the env's site-packages and can shadow its packages too.
+        # Env-only imports (pathfix/sitecustomize.py): training sees the repo plus packages installed in
+        # this env, never the inherited PYTHONPATH, the user site or directories added by startup *.pth files.
+        "PYTHONPATH": os.pathsep.join([str(repo), str(PATHFIX_DIR)]),
         "PYTHONNOUSERSITE": "1",
+        "BASELINE_ENV_ONLY": "1",
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "HF_HOME": str(root / "cache/huggingface"),
         "HF_DATASETS_CACHE": str(root / "cache/huggingface/datasets"),
@@ -183,26 +184,13 @@ def gpu_status(env, n_gpus):
 
 
 PATHFIX_DIR = Path(__file__).resolve().parent / "pathfix"
+PIP_ENV_ONLY = Path(__file__).resolve().parents[2] / "manifests" / "pip-env-only.sh"
 # verl imports flash_attn.bert_padding on CUDA and loads the model with flash_attention_2, so it is required.
 # Same flash-attn release as the reference environment (manifests/pip-freeze.txt); only the build differs.
 FLASH_ATTN_VERSION = "2.7.4.post1"
 
 ENV_PROBE = r"""
 import glob, importlib, importlib.metadata, importlib.util, json, os, pkgutil, site, sys
-
-def top_level(directory):
-    names = set()
-    try:
-        items = os.listdir(directory)
-    except OSError:
-        return names
-    for item in items:
-        if os.path.isdir(os.path.join(directory, item)):
-            if item.isidentifier() and item != "__pycache__":
-                names.add(item)
-        elif item.endswith((".py", ".so", ".pyd")) and item.split(".")[0].isidentifier():
-            names.add(item.split(".")[0])
-    return names
 
 site_dirs = [os.path.abspath(p) for p in site.getsitepackages()]
 startup_files = []
@@ -232,20 +220,11 @@ def entry_of(origin):
 def error(exc):
     return f"{type(exc).__name__}: {exc}"
 
-# Entries placed ahead of the env's site-packages by startup files (not PYTHONPATH, not the stdlib)
-# that contain top-level names also installed in site-packages.
 keep = {os.path.abspath(p) for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p}
 roots = tuple(os.path.join(os.path.abspath(r), "") for r in {sys.prefix, sys.base_prefix})
-positions = [i for i, p in enumerate(sys.path) if p and os.path.abspath(p) in site_dirs]
-installed = set().union(*(top_level(d) for d in site_dirs)) if site_dirs else set()
-shadowing, shadow_sources = {}, {}
-for entry in sys.path[:min(positions) if positions else len(sys.path)]:
-    full = os.path.abspath(entry) if entry else ""
-    if not entry or full in keep or full.startswith(roots):
-        continue
-    clash = sorted(top_level(full) & installed)
-    if clash:
-        shadowing[entry], shadow_sources[entry] = clash[:8], added_by(entry)
+external = [p for p in sys.path if p and os.path.abspath(p) not in keep and not os.path.abspath(p).startswith(roots)]
+hidden = {entry: added_by(entry)
+          for entry in getattr(sys.modules.get("sitecustomize"), "BASELINE_HIDDEN", None) or []}
 
 spec = importlib.util.find_spec("grpc")
 origin = spec.origin if spec else None
@@ -309,7 +288,7 @@ print(json.dumps({
     "flash_attn": flash_version, "flash_error": flash_error, "torch": torch_info,
     "python_tag": f"cp{sys.version_info[0]}{sys.version_info[1]}",
     "glibc": (os.confstr("CS_GNU_LIBC_VERSION") or "").replace("glibc ", ""),
-    "shadowing": shadowing, "shadow_sources": shadow_sources,
+    "hidden": hidden, "external": external,
     "sitecustomize": getattr(importlib.util.find_spec("sitecustomize"), "origin", None),
     "prefix": sys.prefix, "python": sys.executable}), flush=True)
 """
@@ -347,7 +326,7 @@ def env_diagnosis(info):
                     "3.11: torch 2.6.0, flash-attn "
                     f"{FLASH_ATTN_VERSION}, whose wheel needs only glibc 2.14), or build flash-attn from source")
         elif wheel:
-            hint = f" Install the matching prebuilt wheel: {info['python']} -m pip install \"{wheel}\""
+            hint = f" Install the matching prebuilt wheel: bash {PIP_ENV_ONLY} install --no-deps \"{wheel}\""
         else:
             hint = f" torch: {info.get('torch')}"
         blockers.append(f"flash-attn does not import ({info['flash_error']}); verl needs it (flash_attn.bert_padding, "
@@ -359,20 +338,11 @@ def ray_env_diagnosis(info):
     error = info["grpc_error"]
     grpc_missing = error is not None and info["grpc"] is None
     if error and (info["dashboard_full"] or not grpc_missing):
-        where = ", ".join(info["grpc_sources"]) or "an unknown startup file"
-        found = f" Python finds {info['grpc']} (added by {where}) instead," if info["grpc"] else ""
         if not info["grpc_in_env"]:
-            meta = (f" The grpcio {info['grpcio']} metadata it sees lives in {info['grpcio_dir']}, not in the env."
-                    if info["grpcio"] else "")
-            return [f"The env {info['prefix']} has no grpc package in its site-packages.{found} and it fails: "
-                    f"{error}.{meta} Ray's dashboard agent needs grpc, so the node never starts. Install grpcio "
-                    f"into the env (--ignore-installed so pip does not accept the copy outside it): "
-                    f"{info['python']} -m pip install --ignore-installed --no-deps grpcio"]
-        if info["grpc_entry"] and info["grpc_sources"]:
-            return [f"The env has grpc, but {info['grpc_entry']} (added by {where}) is searched first and its "
-                    f"grpc fails: {error}. Remove that entry from the file(s) named"]
+            return [f"The env {info['prefix']} has no grpc ({error}); Ray's dashboard agent needs it, so the node "
+                    f"never starts. Install it into the env: bash {PIP_ENV_ONLY} install --no-deps grpcio==1.83.0"]
         return [f"The env's own grpc fails to import: {error}. Reinstall it: "
-                f"{info['python']} -m pip install --force-reinstall --no-deps grpcio"]
+                f"bash {PIP_ENV_ONLY} install --no-deps --force-reinstall grpcio==1.83.0"]
     if info["dashboard_failures"]:
         return ["Ray's dashboard agent modules fail to import in the training environment, so the Ray node would "
                 "not start: " + "; ".join(info["dashboard_failures"][:5])]
@@ -393,32 +363,25 @@ def probe_python_env(env, repo):
 
 
 def python_env_blockers(env, repo):
-    """Check that Ray's node can start in the training environment (its agent imports grpc and all
-    dashboard modules; a failure there makes ray.init time out).
+    """Check the training environment as training processes will see it (env-only imports).
 
-    Returns (blockers, env_updates). Startup-file entries that shadow installed packages are dropped for the
-    training processes only, via pathfix/sitecustomize.py; nothing in the environment is edited.
+    Ray's dashboard agent imports grpc and every dashboard module (a failure makes ray.init time out), and
+    verl needs flash-attn. Returns (blockers, probe info).
     """
     info = probe_python_env(env, repo)
-    updates = {}
-    if info and info["shadowing"]:
-        for entry, names in info["shadowing"].items():
-            source = ", ".join(info["shadow_sources"][entry]) or "an unknown startup file"
-            print(f"Dropping sys.path entry {entry} for training processes: {source} puts it ahead of the env's "
-                  f"site-packages, where it shadows {', '.join(names)}")
-        updates = {"PYTHONPATH": env["PYTHONPATH"] + os.pathsep + str(PATHFIX_DIR),
-                   "BASELINE_DROP_SYS_PATH": os.pathsep.join(info["shadowing"])}
-        info = probe_python_env(dict(env, **updates), repo)
-        if info and info["shadowing"]:
-            files = ", ".join(sum(info["shadow_sources"].values(), []))
-            return [f"Could not drop {', '.join(info['shadowing'])} automatically (active sitecustomize: "
-                    f"{info['sitecustomize']}); remove it from {files}"], {}
-    if info:
-        mode = "full" if info["dashboard_full"] else "minimal"
-        print(f"grpc: {info['grpc']} (grpcio {info['grpcio']} at {info['grpcio_dir']}); "
-              f"Ray dashboard modules ({mode}): {len(info['dashboard_failures'])} import failure(s)")
-        print(f"torch: {info['torch']}; flash-attn: {info['flash_attn'] or 'NOT IMPORTABLE'}")
-    return env_diagnosis(info), updates
+    if not info:
+        return env_diagnosis(info), {}
+    for entry, sources in info["hidden"].items():
+        print(f"Hidden from training (outside the env): {entry}"
+              + (f" (added by {', '.join(sources)})" if sources else ""))
+    if info["external"]:
+        return [f"Could not restrict training to the env: {', '.join(info['external'])} is still on sys.path "
+                f"(active sitecustomize: {info['sitecustomize']})"], info
+    mode = "full" if info["dashboard_full"] else "minimal"
+    print(f"grpc: {info['grpc']} (grpcio {info['grpcio']}); "
+          f"Ray dashboard modules ({mode}): {len(info['dashboard_failures'])} import failure(s)")
+    print(f"torch: {info['torch']}; flash-attn: {info['flash_attn'] or 'NOT IMPORTABLE'}")
+    return env_diagnosis(info), info
 
 
 def owned_ray_processes():
@@ -574,7 +537,8 @@ def main():
     runs = Path(os.environ.get("BASELINE_RUNS", str(root / "paper-runs"))).resolve()
     run_dir = runs / args.name
     env = environment(root, repo, args.name, args.n_gpus, nnodes)
-    ignored_pythonpath = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    inherited = os.environ.get("BASELINE_INHERITED_PYTHONPATH", os.environ.get("PYTHONPATH", ""))
+    ignored_pythonpath = [entry for entry in inherited.split(os.pathsep) if entry]
     if ignored_pythonpath:
         print("Not passing inherited PYTHONPATH to training:", os.pathsep.join(ignored_pythonpath))
     _, _, temp_note = temp_dirs(root, args.name)
@@ -587,8 +551,7 @@ def main():
     # in this process too, and would otherwise surface as a raw traceback from the data check.
     probe_env = dict(env)
     probe_env.pop("TMPDIR", None)
-    env_blockers, env_updates = python_env_blockers(probe_env, repo)
-    env.update(env_updates)
+    env_blockers, env_info = python_env_blockers(probe_env, repo)
     if env_blockers:
         raise RuntimeError("Training environment is not usable: " + "; ".join(env_blockers))
     examples = check_data(root)
@@ -714,7 +677,7 @@ def main():
                 "tmpdir": env["TMPDIR"], "ray_tmpdir": env["RAY_TMPDIR"],
                 "ray_temp_fstype": temp_fstype, "ray_temp_disk_free_gib_at_launch": temp_disk.free / GIB,
                 "ignored_pythonpath": ignored_pythonpath,
-                "dropped_sys_path": env.get("BASELINE_DROP_SYS_PATH", ""),
+                "hidden_sys_path": sorted(env_info.get("hidden", {})),
                 "source_sha256": {f: sha256(repo / f) for f in source_files},
                 "gpu_visibility": env["CUDA_VISIBLE_DEVICES"], "prompt_examples": examples,
                 "model_config": json.loads((root / "models/Qwen2.5-Math-7B/config.json").read_text())}
@@ -740,7 +703,21 @@ def main():
     return 0
 
 
+def reexec_env_only():
+    """Run this launcher (data and Hydra checks included) with the same env-only imports as training."""
+    if os.environ.get("BASELINE_ENV_ONLY") == "1":
+        return
+    repo = Path(__file__).resolve().parent.parent
+    env = dict(os.environ, BASELINE_ENV_ONLY="1", PYTHONNOUSERSITE="1",
+               BASELINE_INHERITED_PYTHONPATH=os.environ.get("PYTHONPATH", ""),
+               PYTHONPATH=os.pathsep.join([str(repo), str(PATHFIX_DIR)]))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(sys.executable, [sys.executable, "-u", "-m", "baseline_4gpu.launch", *sys.argv[1:]], env)
+
+
 if __name__ == "__main__":
+    reexec_env_only()
     try:
         raise SystemExit(main())
     except Exception as exc:
