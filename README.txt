@@ -17,7 +17,7 @@ hf download \
 
 
 # 提交任务
-cd ".../NSR/NSR-baseline"
+cd "/data/lihourun/NSR/NSR-baseline"
 unset PYTORCH_CUDA_ALLOC_CONF
 
 RAY_DATA_HOME="/data/lihourun/NSR" \
