@@ -236,6 +236,15 @@ def verify(
         return correct == 1, pred
 
     correct, pred = is_correct_minerva(solution_str, answer)
+    if pred != "[INVALID]":
+        return correct, pred
+
+    box_correct, box_pred = is_correct_strict_box(
+        solution_str, answer, pause_tokens_index
+    )
+    if box_pred is not None:
+        return box_correct == 1, box_pred
+
     return correct, pred
 
 def compute_score(

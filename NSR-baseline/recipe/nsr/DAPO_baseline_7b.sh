@@ -1,143 +1,133 @@
+#!/usr/bin/env bash
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
+WORKING_DIR="$(pwd)"
 
-project_name='DAPO-baseline'
-exp_name="DAPO_baseline_7b_author32"
+RAY_DATA_HOME="${RAY_DATA_HOME:-/home/lihourun/hsc/NSR-work}"
+MODEL_PATH="${MODEL_PATH:-${RAY_DATA_HOME}/models/Qwen2.5-Math-7B}"
+TRAIN_FILE="${TRAIN_FILE:-${RAY_DATA_HOME}/data/dapo-math-17k.parquet}"
+TEST_FILE="${TEST_FILE:-${RAY_DATA_HOME}/data/aime-2024.parquet}"
+N_GPUS_PER_NODE="${N_GPUS_PER_NODE:-8}"
+NNODES="${NNODES:-4}"
+EXP_NAME="${EXP_NAME:-DAPO_baseline_7b_4096_$(date +%Y%m%d-%H%M%S)}"
+RUN_DIR="${RUN_DIR:-${RAY_DATA_HOME}/paper-runs/${EXP_NAME}}"
+VAL_ONLY="${VAL_ONLY:-false}"
 
-adv_estimator=grpo
-NNODES=${NNODES:-4}
-
-use_kl_in_reward=False
-kl_coef=0.0
-use_kl_loss=False
-kl_loss_coef=0.0
-
-NSR=False
-nsr_delta=0.1
-
-clip_ratio_low=0.2
-clip_ratio_high=0.28
-
-max_prompt_length=$((1024 * 2))
-max_response_length=$((1024 * 8))
-enable_overlong_buffer=True
-overlong_buffer_len=$((1024 * 4))
-overlong_penalty_factor=1.0
-
-loss_agg_mode="token-mean"
-
-enable_filter_groups=True
-filter_groups_metric=acc
-max_num_gen_batches=10
-train_prompt_bsz=512
-gen_prompt_bsz=$((train_prompt_bsz * 3))
-n_resp_per_prompt=16
-train_prompt_mini_bsz=32
-
-nccl_timeout=36000
-
-WORKING_DIR=${WORKING_DIR:-"${PWD}"}
+mkdir -p "${RUN_DIR}/validation" "${RUN_DIR}/checkpoints"
 echo "Working directory: ${WORKING_DIR}"
-RUNTIME_ENV=${RUNTIME_ENV:-"${WORKING_DIR}/verl/trainer/runtime_env.yaml"}
+echo "Run directory: ${RUN_DIR}"
 
-# paths - set these environment variables or modify defaults
-RAY_DATA_HOME=${RAY_DATA_HOME:-"/data/lihourun/NSR"}
-MODEL_PATH=${MODEL_PATH:-"/data/lihourun/NSR/models/Qwen2.5-Math-7B"}
-CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
-TRAIN_FILE=${TRAIN_FILE:-"${RAY_DATA_HOME}/data/dapo-math-17k.parquet"}
-TEST_FILE=${TEST_FILE:-"${RAY_DATA_HOME}/data/aime-2024-unique30.parquet"}
+python3 - "${MODEL_PATH}/config.json" "${TEST_FILE}" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-# Rollout and validation data
-ROLLOUT_DATA_DIR=${ROLLOUT_DATA_DIR:-"${RAY_DATA_HOME}/rollout_data/${project_name}/${exp_name}"}
-VALIDATION_DATA_DIR=${VALIDATION_DATA_DIR:-"${RAY_DATA_HOME}/validation_data/${project_name}/${exp_name}"}
+import pyarrow.parquet as pq
 
-# Algorithm
-temperature=1.0
-top_p=1.0
-top_k=-1  # 0 for HF rollout, -1 for vLLM rollout
-val_top_p=0.7
-
-# Performance Related Parameter
-sp_size=2
-use_dynamic_bsz=True
-actor_ppo_max_token_len=$((max_prompt_length + max_response_length))
-infer_ppo_max_token_len=$((max_prompt_length + max_response_length))
-offload=True
-gen_tp=1
+model_config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if (
+    model_config.get("max_position_embeddings") != 4096
+    or float(model_config.get("rope_theta", 0)) != 10000.0
+    or model_config.get("rope_scaling") is not None
+):
+    raise SystemExit("MODEL_PATH must point to the original Qwen2.5-Math-7B 4096-token config")
+if pq.ParquetFile(sys.argv[2]).metadata.num_rows != 960:
+    raise SystemExit("TEST_FILE must contain 30 AIME questions repeated 32 times (960 rows)")
+PY
 
 python3 -m recipe.dapo.main_dapo \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${TEST_FILE}" \
     data.prompt_key=prompt \
-    data.truncation='left' \
-    data.max_prompt_length=${max_prompt_length} \
-    data.max_response_length=${max_response_length} \
-    data.gen_batch_size=${gen_prompt_bsz} \
-    data.train_batch_size=${train_prompt_bsz} \
-    actor_rollout_ref.rollout.n=${n_resp_per_prompt} \
-    actor_rollout_ref.actor.use_kl_loss=${use_kl_loss} \
-    actor_rollout_ref.actor.kl_loss_coef=${kl_loss_coef} \
-    actor_rollout_ref.actor.clip_ratio_low=${clip_ratio_low} \
-    actor_rollout_ref.actor.clip_ratio_high=${clip_ratio_high} \
-    actor_rollout_ref.actor.clip_ratio_c=10.0 \
-    actor_rollout_ref.actor.NSR=${NSR} \
-    actor_rollout_ref.actor.nsr_delta=${nsr_delta} \
-    actor_rollout_ref.actor.checkpoint.save_contents='["model", "optimizer", "extra", "hf_model"]' \
-    algorithm.adv_estimator=${adv_estimator} \
-    algorithm.use_kl_in_reward=${use_kl_in_reward} \
-    algorithm.kl_ctrl.kl_coef=${kl_coef} \
-    algorithm.filter_groups.enable=${enable_filter_groups} \
-    algorithm.filter_groups.metric=${filter_groups_metric} \
-    algorithm.filter_groups.max_num_gen_batches=${max_num_gen_batches} \
-    actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.use_dynamic_bsz=${use_dynamic_bsz} \
-    actor_rollout_ref.ref.log_prob_use_dynamic_bsz=${use_dynamic_bsz} \
-    actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=${use_dynamic_bsz} \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=${actor_ppo_max_token_len} \
-    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=${infer_ppo_max_token_len} \
-    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=${infer_ppo_max_token_len} \
+    data.truncation=left \
+    data.max_prompt_length=2048 \
+    data.max_response_length=2048 \
+    data.gen_batch_size=1536 \
+    data.train_batch_size=512 \
+    data.filter_overlong_prompts=false \
+    ++data.cache_dir="${RAY_DATA_HOME}/cache/verl/rlhf" \
+    data.custom_cls.path=pkg://recipe.nsr.answer_format_dataset \
+    data.custom_cls.name=AnswerFormatDataset \
+    ++data.seed=1 \
     actor_rollout_ref.model.path="${MODEL_PATH}" \
-    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.model.use_remove_padding=true \
+    actor_rollout_ref.model.enable_gradient_checkpointing=true \
+    actor_rollout_ref.actor.NSR=false \
+    actor_rollout_ref.actor.nsr_delta=0.1 \
+    actor_rollout_ref.actor.use_random_adv=false \
+    actor_rollout_ref.actor.clip_ratio_low=0.2 \
+    actor_rollout_ref.actor.clip_ratio_high=0.28 \
+    actor_rollout_ref.actor.clip_ratio_c=10.0 \
+    actor_rollout_ref.actor.use_kl_loss=false \
+    actor_rollout_ref.actor.kl_loss_coef=0.0 \
+    actor_rollout_ref.actor.entropy_coeff=0.0 \
+    actor_rollout_ref.actor.loss_agg_mode=token-mean \
+    actor_rollout_ref.actor.policy_loss.loss_mode=vanilla \
+    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
+    actor_rollout_ref.actor.ppo_epochs=1 \
     actor_rollout_ref.actor.optim.lr=1e-6 \
-    actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps=0 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0 \
+    actor_rollout_ref.actor.optim.warmup_style=constant \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=${train_prompt_mini_bsz} \
-    actor_rollout_ref.actor.fsdp_config.param_offload=${offload} \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=${offload} \
-    actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.grad_clip=1.0 \
-    actor_rollout_ref.actor.loss_agg_mode=${loss_agg_mode} \
-    actor_rollout_ref.actor.ulysses_sequence_parallel_size=${sp_size} \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=${gen_tp} \
-    actor_rollout_ref.rollout.enable_chunked_prefill=True \
-    actor_rollout_ref.rollout.max_num_batched_tokens=$((max_prompt_length + max_response_length)) \
-    actor_rollout_ref.rollout.temperature=${temperature} \
-    actor_rollout_ref.rollout.top_p=${top_p} \
-    actor_rollout_ref.rollout.top_k="${top_k}" \
-    actor_rollout_ref.rollout.val_kwargs.temperature=${temperature} \
-    actor_rollout_ref.rollout.val_kwargs.top_p=${val_top_p} \
-    actor_rollout_ref.rollout.val_kwargs.top_k=${top_k} \
-    actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-    actor_rollout_ref.rollout.val_kwargs.n=32 \
-    actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.ref.fsdp_config.param_offload=${offload} \
-    actor_rollout_ref.ref.ulysses_sequence_parallel_size=${sp_size} \
+    actor_rollout_ref.actor.use_dynamic_bsz=true \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=10240 \
+    actor_rollout_ref.actor.ulysses_sequence_parallel_size=2 \
     actor_rollout_ref.actor.fsdp_config.fsdp_size=-1 \
+    actor_rollout_ref.actor.fsdp_config.param_offload=true \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
+    actor_rollout_ref.actor.checkpoint.save_contents='["model","optimizer","extra","hf_model"]' \
+    actor_rollout_ref.actor.checkpoint.load_contents='["model","optimizer","extra"]' \
+    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.n=16 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.enforce_eager=true \
+    actor_rollout_ref.rollout.enable_chunked_prefill=true \
+    actor_rollout_ref.rollout.max_num_batched_tokens=10240 \
+    actor_rollout_ref.rollout.temperature=1.0 \
+    actor_rollout_ref.rollout.top_p=1.0 \
+    actor_rollout_ref.rollout.top_k=-1 \
+    ++actor_rollout_ref.rollout.seed=0 \
+    actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true \
+    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=10240 \
+    actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
+    actor_rollout_ref.rollout.val_kwargs.top_p=0.7 \
+    actor_rollout_ref.rollout.val_kwargs.top_k=-1 \
+    actor_rollout_ref.rollout.val_kwargs.do_sample=true \
+    actor_rollout_ref.rollout.val_kwargs.n=1 \
+    actor_rollout_ref.ref.log_prob_use_dynamic_bsz=true \
+    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=10240 \
+    actor_rollout_ref.ref.ulysses_sequence_parallel_size=2 \
+    actor_rollout_ref.ref.fsdp_config.param_offload=true \
+    algorithm.adv_estimator=grpo \
+    algorithm.use_kl_in_reward=false \
+    algorithm.kl_ctrl.kl_coef=0.0 \
+    algorithm.filter_groups.enable=true \
+    algorithm.filter_groups.metric=acc \
+    algorithm.filter_groups.max_num_gen_batches=10 \
     reward_model.reward_manager=dapo \
-    reward_model.overlong_buffer.enable=${enable_overlong_buffer} \
-    reward_model.overlong_buffer.len=${overlong_buffer_len} \
-    reward_model.overlong_buffer.penalty_factor=${overlong_penalty_factor} \
-    trainer.logger='["console","wandb"]' \
-    trainer.project_name="${project_name}" \
-    trainer.experiment_name="${exp_name}" \
-    trainer.rollout_data_dir=${ROLLOUT_DATA_DIR} \
-    trainer.validation_data_dir=${VALIDATION_DATA_DIR} \
-    trainer.n_gpus_per_node=8 \
+    custom_reward_function.path="${WORKING_DIR}/recipe/nsr/answer_reward.py" \
+    custom_reward_function.name=compute_score \
+    reward_model.overlong_buffer.enable=true \
+    reward_model.overlong_buffer.len=1024 \
+    reward_model.overlong_buffer.penalty_factor=1.0 \
+    trainer.logger='["console"]' \
+    trainer.project_name=DAPO-paper-aligned \
+    trainer.experiment_name="${EXP_NAME}" \
+    trainer.n_gpus_per_node="${N_GPUS_PER_NODE}" \
     trainer.nnodes="${NNODES}" \
-    trainer.val_before_train=True \
+    trainer.val_before_train=true \
+    trainer.val_only="${VAL_ONLY}" \
     trainer.test_freq=5 \
     trainer.save_freq=20 \
-    trainer.total_epochs=1 \
-    trainer.default_local_dir="${CKPTS_DIR}"
+    trainer.max_actor_ckpt_to_keep=2 \
+    trainer.total_epochs=3 \
+    trainer.total_training_steps=300 \
+    trainer.resume_mode=disable \
+    trainer.default_local_dir="${RUN_DIR}/checkpoints" \
+    trainer.rollout_data_dir=null \
+    trainer.validation_data_dir="${RUN_DIR}/validation" \
+    hydra.run.dir="${RUN_DIR}/hydra"
