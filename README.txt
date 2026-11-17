@@ -26,3 +26,43 @@ RAY_ADDRESS=auto \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 NNODES=4 \
 bash recipe/nsr/DAPO_baseline_7b.sh
+
+
+
+
+# Environment
+conda env create -n nsr -f "/data/lihourun/NSR/manifests/environment-no-builds.yml"
+conda activate nsr
+
+# Validation data
+python3 - <<'PY'
+from pathlib import Path
+import json
+import pandas as pd
+
+source = Path(".../aime-2024.parquet")
+data = pd.read_parquet(source)
+keys = data["prompt"].map(
+    lambda messages: json.dumps(list(messages), sort_keys=True, ensure_ascii=False)
+)
+data.loc[~keys.duplicated()].to_parquet(
+    source.with_name("aime-2024-unique30.parquet"),
+    index=False,
+)
+PY
+
+# Training
+cd "/data/lihourun/NSR/NSR-baseline"
+unset PYTORCH_CUDA_ALLOC_CONF
+
+RAY_DATA_HOME="/data/lihourun/NSR" \
+MODEL_PATH="/data/lihourun/NSR/models/Qwen2.5-Math-7B" \
+TRAIN_FILE=".../dapo-math-17k.parquet" \
+TEST_FILE=".../aime-2024-unique30.parquet" \
+RAY_ADDRESS=auto \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+NNODES=4 \
+N_GPUS_PER_NODE=8 \
+EXP_NAME="DAPO_baseline_7b" \
+WANDB_MODE=offline \
+bash recipe/nsr/DAPO_baseline_7b_4096.sh
