@@ -1,3 +1,35 @@
+# 1.5B 模型下载
+mkdir -p "/data/lihourun/NSR/models/Qwen2.5-Math-1.5B"
+
+HF_HOME="/data/lihourun/NSR/cache/huggingface" \
+hf download \
+  Qwen/Qwen2.5-Math-1.5B \
+  --local-dir "/data/lihourun/NSR/models/Qwen2.5-Math-1.5B"
+
+
+# 1.5B 训练配置（复用 nsr 环境，单机八卡）
+conda activate nsr
+cd "/data/lihourun/NSR/NSR-baseline"
+unset PYTORCH_CUDA_ALLOC_CONF
+
+export RAY_DATA_HOME="/data/lihourun/NSR"
+export MODEL_PATH="${RAY_DATA_HOME}/models/Qwen2.5-Math-1.5B"
+export TRAIN_FILE="${RAY_DATA_HOME}/data/DAPO-Math-17k/data/dapo-math-17k.parquet"
+export TEST_FILE="${RAY_DATA_HOME}/data/AIME-2024/data/aime-2024.parquet"
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export N_GPUS_PER_NODE=8
+export NNODES=1
+
+# baseline（300 step）
+NSR=false STEPS=300 EXP_NAME=small-baseline-300 \
+bash recipe/nsr/DAPO_baseline_1p5b.sh
+
+# NSR（300 step，baseline 完成后运行）
+NSR=true STEPS=300 EXP_NAME=small-nsr-300 \
+bash recipe/nsr/DAPO_baseline_1p5b.sh
+
+
+# 以下为原有 7B 配置
 # 环境配置
 conda env create \
   -n nsr \
