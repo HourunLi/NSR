@@ -40,7 +40,7 @@ from pathlib import Path
 import json
 import pandas as pd
 
-source = Path(".../aime-2024.parquet")
+source = Path("/data/lihourun/NSR/data/AIME-2024/data/aime-2024.parquet")
 data = pd.read_parquet(source)
 keys = data["prompt"].map(
     lambda messages: json.dumps(list(messages), sort_keys=True, ensure_ascii=False)
@@ -57,8 +57,8 @@ unset PYTORCH_CUDA_ALLOC_CONF
 
 RAY_DATA_HOME="/data/lihourun/NSR" \
 MODEL_PATH="/data/lihourun/NSR/models/Qwen2.5-Math-7B" \
-TRAIN_FILE=".../dapo-math-17k.parquet" \
-TEST_FILE=".../aime-2024-unique30.parquet" \
+TRAIN_FILE="/data/lihourun/NSR/data/DAPO-Math-17k/data/dapo-math-17k.parquet" \
+TEST_FILE="/data/lihourun/NSR/data/AIME-2024/data/aime-2024-unique30.parquet" \
 RAY_ADDRESS=auto \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 NNODES=4 \
