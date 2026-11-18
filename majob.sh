@@ -104,14 +104,16 @@ PY
 local_tmp=$(mktemp -d /tmp/nsr.XXXXXXXX)
 export TMPDIR="$local_tmp" RAY_TMPDIR="$local_tmp"
 mkdir -p -- "$runs_dir"
-printf 'Ray temp: %s\n' "$RAY_TMPDIR"
+batch_dir=$(mktemp -d -- "$runs_dir/run-XXXXXXXX") ||
+    die "Cannot create a run directory under $runs_dir"
+printf 'Ray temp: %s\nRun output: %s\n' "$RAY_TMPDIR" "$batch_dir"
 
 run_training() {
     local label=$1 enable_nsr=$2
     local name="small-${label}-300"
-    local run_dir="$runs_dir/$name"
+    local run_dir="$batch_dir/$name"
 
-    mkdir -- "$run_dir" || die "Cannot create $run_dir. Use a fresh RUNS_DIR for a rerun."
+    mkdir -- "$run_dir"
     printf 'Starting %s | output: %s\n' "$name" "$run_dir"
     NSR="$enable_nsr" STEPS=300 EXP_NAME="$name" RUN_DIR="$run_dir" VAL_ONLY=false \
         bash "$recipe" 2>&1 | tee "$run_dir/train.log"

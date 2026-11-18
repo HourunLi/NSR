@@ -12,7 +12,8 @@ cd "${MA_JOB_DIR}/NSR" && bash majob.sh both
 # 对应开发机的 /data/lihourun/NSR。路径不同可设置 RAY_DATA_HOME。
 # HF 缓存沿用 niahLogKV 的 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。
 # 离线运行前准备本地模型权重及训练和验证 Parquet，AIME 文件须有 960 行。
-# 输出保存在 RAY_DATA_HOME/paper-runs 下各自的实验目录。重跑时可设置新的 RUNS_DIR。
+# 每次启动会在 RAY_DATA_HOME/paper-runs 下新建 run-XXXXXXXX，两个实验各有一个子目录。
+# 可用 RUNS_DIR 指定输出根目录。重跑会从初始模型开始训练。
 
 # 开发机也可以用同一个启动脚本。未设置 MA_JOB_DIR 时，
 # 数据根目录默认是脚本所在的仓库目录，HF 缓存默认是该数据根目录下的 cache/huggingface。
