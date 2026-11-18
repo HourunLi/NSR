@@ -76,6 +76,19 @@ export TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1
 export PYTHONPATH="$PWD:$repo_root/NSR-main/baseline_4gpu/pathfix"
 export BASELINE_ENV_ONLY=1
 
+# Prefer the host driver as in LogKV. ModelArts can prepend a CUDA 11.4
+# forward-compatibility driver that shadows the host libcuda for cu124 Torch.
+cuda_library_dirs=(/usr/lib/x86_64-linux-gnu)
+IFS=: read -r -a inherited_library_dirs <<< "${LD_LIBRARY_PATH:-}"
+for lib_dir in "${inherited_library_dirs[@]}"; do
+    case "${lib_dir%/}" in
+        ""|/usr/lib/x86_64-linux-gnu|/usr/local/cuda-11.4/compat) ;;
+        *) cuda_library_dirs+=("$lib_dir") ;;
+    esac
+done
+printf -v LD_LIBRARY_PATH '%s:' "${cuda_library_dirs[@]}"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH%:}"
+
 export RAY_DATA_HOME="$ray_data_home" MODEL_PATH="$model_path"
 export TRAIN_FILE="$train_file" TEST_FILE="$test_file"
 export NNODES=1
