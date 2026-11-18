@@ -17,32 +17,50 @@ cd "$repo_root/NSR-baseline" || die "Cannot find NSR-baseline in $repo_root"
 recipe=recipe/nsr/DAPO_baseline_1p5b.sh
 [[ -r "$recipe" ]] || die "Cannot read $PWD/$recipe"
 
-# ModelArts 的代码由 MA_JOB_DIR 提供。开发机 /data/lihourun 对应共享盘用户目录。
-shared=/home/ma-user/work/bucket-pangu-green/lihourun
-hf_home=${HF_HOME:-$shared/data/hf_cache}
-ray_data_home=${RAY_DATA_HOME:-$shared/NSR}
+if [[ -n "${MA_JOB_DIR:-}" ]]; then
+    shared=/home/ma-user/work/bucket-pangu-green/lihourun
+    ray_data_home=${RAY_DATA_HOME:-$shared/NSR}
+    hf_home=${HF_HOME:-$shared/data/hf_cache}
+else
+    ray_data_home=${RAY_DATA_HOME:-$repo_root}
+    hf_home=${HF_HOME:-$ray_data_home/cache/huggingface}
+fi
 model_path=${MODEL_PATH:-$ray_data_home/models/Qwen2.5-Math-1.5B}
 train_file=${TRAIN_FILE:-$ray_data_home/data/DAPO-Math-17k/data/dapo-math-17k.parquet}
 test_file=${TEST_FILE:-$ray_data_home/data/AIME-2024/data/aime-2024.parquet}
 runs_dir=${RUNS_DIR:-$ray_data_home/paper-runs}
-conda_sh=${CONDA_SH:-/home/ma-user/anaconda3/etc/profile.d/conda.sh}
 conda_env=${CONDA_ENV:-nsr}
+conda_sh=${CONDA_SH:-}
+if [[ -z "$conda_sh" && "${CONDA_DEFAULT_ENV:-}" != "$conda_env" ]]; then
+    if [[ -n "${MA_JOB_DIR:-}" ]]; then
+        conda_sh=/home/ma-user/anaconda3/etc/profile.d/conda.sh
+    else
+        conda_base=$(conda info --base) || die "Cannot locate Conda. Activate $conda_env or set CONDA_SH."
+        conda_sh="$conda_base/etc/profile.d/conda.sh"
+    fi
+fi
 
 printf 'Repo: %s\nHF cache: %s\nNSR data: %s\nModel: %s\nTrain data: %s\nAIME data: %s\nRuns: %s\nConda: %s (%s)\n' \
     "$repo_root" "$hf_home" "$ray_data_home" "$model_path" "$train_file" "$test_file" \
-    "$runs_dir" "$conda_sh" "$conda_env"
+    "$runs_dir" "${conda_sh:-active environment}" "$conda_env"
 
 [[ -r "$model_path/config.json" ]] || die "Cannot read model config: $model_path/config.json"
 [[ -r "$train_file" ]] || die "Cannot read training data: $train_file"
 [[ -r "$test_file" ]] || die "Cannot read AIME data: $test_file"
-[[ -d "$hf_home" && -x "$hf_home" ]] || die "Cannot access HF cache: $hf_home"
-[[ -r "$conda_sh" ]] || die "Cannot read conda.sh: $conda_sh (set CONDA_SH)"
+if [[ -n "${MA_JOB_DIR:-}" ]]; then
+    [[ -d "$hf_home" && -x "$hf_home" ]] || die "Cannot access HF cache: $hf_home"
+fi
+if [[ -n "$conda_sh" ]]; then
+    [[ -r "$conda_sh" ]] || die "Cannot read conda.sh: $conda_sh (set CONDA_SH)"
+fi
 if [[ "$mode" == check ]]; then
     exit 0
 fi
 
-source "$conda_sh"
-conda activate "$conda_env" || die "Cannot activate the NSR conda environment"
+if [[ -n "$conda_sh" ]]; then
+    source "$conda_sh"
+    conda activate "$conda_env" || die "Cannot activate the NSR conda environment"
+fi
 set -u
 
 export HF_HOME="$hf_home"
@@ -58,7 +76,6 @@ export TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1
 export PYTHONPATH="$PWD:$repo_root/NSR-main/baseline_4gpu/pathfix"
 export BASELINE_ENV_ONLY=1
 
-# 模型、数据和训练产物放在共享盘。Ray 的 Unix socket 使用本机短路径。
 export RAY_DATA_HOME="$ray_data_home" MODEL_PATH="$model_path"
 export TRAIN_FILE="$train_file" TEST_FILE="$test_file"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES-0,1,2,3,4,5,6,7}"

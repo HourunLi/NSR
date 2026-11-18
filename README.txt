@@ -14,6 +14,14 @@ cd "${MA_JOB_DIR}/NSR" && bash majob.sh both
 # 离线运行前准备本地模型权重及训练和验证 Parquet，AIME 文件须有 960 行。
 # 输出保存在 RAY_DATA_HOME/paper-runs 下各自的实验目录。重跑时可设置新的 RUNS_DIR。
 
+# 开发机也可以用同一个启动脚本。未设置 MA_JOB_DIR 时，
+# 数据根目录默认是脚本所在的仓库目录，HF 缓存默认是该数据根目录下的 cache/huggingface。
+# 已激活的 nsr 环境会直接复用。
+cd /data/lihourun/NSR
+conda activate nsr
+bash majob.sh check
+bash majob.sh both
+
 
 # 1.5B 模型下载
 mkdir -p "/data/lihourun/NSR/models/Qwen2.5-Math-1.5B"
