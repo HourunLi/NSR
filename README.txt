@@ -1,3 +1,20 @@
+# ModelArts 1.5B 训练（单机八卡）
+# 将仓库作为代码目录提交，以下命令假设任务中的目录名为 NSR。
+# 启动前检查代码、缓存、模型配置、Parquet 文件和 Conda 初始化脚本。
+cd "${MA_JOB_DIR}/NSR" && bash majob.sh check
+
+# ModelArts 启动命令，先跑 baseline 300 步，成功后再跑 NSR 300 步。
+cd "${MA_JOB_DIR}/NSR" && bash majob.sh both
+
+# 也可以用 bash majob.sh baseline 或 bash majob.sh nsr 单独提交。
+# 默认激活 nsr，Conda 安装位置不同可设置 CONDA_SH。
+# 共享盘 NSR 根目录为 /home/ma-user/work/bucket-pangu-green/lihourun/NSR，
+# 对应开发机的 /data/lihourun/NSR。路径不同可设置 RAY_DATA_HOME。
+# HF 缓存沿用 niahLogKV 的 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。
+# 离线运行前准备本地模型权重及训练和验证 Parquet，AIME 文件须有 960 行。
+# 输出保存在 RAY_DATA_HOME/paper-runs 下各自的实验目录。重跑时可设置新的 RUNS_DIR。
+
+
 # 1.5B 模型下载
 mkdir -p "/data/lihourun/NSR/models/Qwen2.5-Math-1.5B"
 
