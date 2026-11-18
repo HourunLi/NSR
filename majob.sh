@@ -81,25 +81,10 @@ export TRAIN_FILE="$train_file" TEST_FILE="$test_file"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES-0,1,2,3,4,5,6,7}"
 export N_GPUS_PER_NODE=8 NNODES=1
 export NCCL_NVLS_ENABLE=0 NCCL_NET_PLUGIN=none NCCL_IB_TIMEOUT=22
+export NSR_LOG_CUDA_STARTUP=1
 unset PYTORCH_CUDA_ALLOC_CONF
 
-python3 - <<'PY'
-import os
-import sys
-
-import torch
-
-hosts = int(os.environ.get("MA_NUM_HOSTS") or 1)
-required = int(os.environ["N_GPUS_PER_NODE"])
-allocated = int(os.environ.get("MA_NUM_GPUS") or required)
-visible = torch.cuda.device_count()
-if hosts != 1 or min(allocated, visible) < required:
-    raise SystemExit(
-        f"Need one host with {required} GPUs. "
-        f"Job has {hosts} host(s), {allocated} allocated GPUs, {visible} visible GPUs."
-    )
-print(f"Python: {sys.executable} | Torch: {torch.__version__} | CUDA: {torch.version.cuda}")
-PY
+python3 verl/utils/cuda_diagnostics.py
 
 local_tmp=$(mktemp -d /tmp/nsr.XXXXXXXX)
 export TMPDIR="$local_tmp" RAY_TMPDIR="$local_tmp"

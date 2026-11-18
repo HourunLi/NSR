@@ -8,6 +8,8 @@ cd "${MA_JOB_DIR}/NSR" && bash majob.sh both
 
 # 也可以用 bash majob.sh baseline 或 bash majob.sh nsr 单独提交。
 # 默认激活 nsr，Conda 安装位置不同可设置 CONDA_SH。
+# 作业日志中的 [NSR CUDA launcher ...] 记录实际 Python、Torch、NVIDIA 驱动和 CUDA 初始化结果。
+# Ray worker 无法选择 GPU 后端时，[NSR CUDA worker ...] 还会记录该进程分配到的 GPU ID。
 # 共享盘 NSR 根目录为 /home/ma-user/work/bucket-pangu-green/lihourun/NSR，
 # 对应开发机的 /data/lihourun/NSR。路径不同可设置 RAY_DATA_HOME。
 # HF 缓存沿用 niahLogKV 的 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。

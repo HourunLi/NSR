@@ -9,6 +9,7 @@
 # This source code is licensed under the BSD-style license in https://github.com/pytorch/torchtune/blob/main/LICENSE
 
 import logging
+import os
 
 import torch
 
@@ -83,4 +84,8 @@ def get_nccl_backend() -> str:
     elif is_npu_available:
         return "hccl"
     else:
+        if os.environ.get("NSR_LOG_CUDA_STARTUP") == "1":
+            from .cuda_diagnostics import report_cuda
+
+            report_cuda("worker")
         raise RuntimeError(f"No available nccl backend found on device type {get_device_name()}.")
