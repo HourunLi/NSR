@@ -67,44 +67,53 @@ def report_cuda(role):
             log(f"loaded CUDA libraries: {', '.join(sorted(libs)) or '(none)'}")
 
 
-def main():
-    # majob.sh captures stdout to pass the selected count to the training recipe.
+def select_gpu_count(minibatch=32, train_batch=128, gen_batch=384, actor_sp=1, ref_sp=1, rollout_tp=1):
     with redirect_stdout(sys.stderr):
         visible = report_cuda("launcher")
     if visible is None:
         raise SystemExit("NSR CUDA preflight failed. See the launcher diagnostics above.")
 
     try:
-        hosts = int(os.environ.get("MA_NUM_HOSTS") or 1)
+        hosts = int(os.environ.get("MA_NUM_HOSTS") or os.environ.get("VC_WORKER_NUM") or 1)
         allocated = int(os.environ.get("MA_NUM_GPUS") or visible)
         requested = int(os.environ["N_GPUS_PER_NODE"]) if os.environ.get("N_GPUS_PER_NODE") else None
     except ValueError as error:
-        raise SystemExit("MA_NUM_HOSTS, MA_NUM_GPUS and N_GPUS_PER_NODE must be integers.") from error
-    if hosts != 1:
-        raise SystemExit(f"The NSR 1.5B launcher needs one host; the job has {hosts}.")
+        raise SystemExit("The ModelArts node count, MA_NUM_GPUS and N_GPUS_PER_NODE must be integers.") from error
+    if hosts < 1:
+        raise SystemExit(f"The ModelArts node count must be positive, got {hosts}.")
     available = min(allocated, visible)
     if available < 1:
         raise SystemExit(f"No usable GPUs: {allocated} allocated, {visible} CUDA-visible.")
 
-    # DAPO_baseline_1p5b.sh uses 8 prompts per PPO minibatch, with 4 rollouts each.
-    # Its generation and training batches are also multiples of these 32 samples.
-    minibatch = 8 * 4
-    compatible = [n for n in range(1, min(available, minibatch) + 1) if minibatch % n == 0]
+    # Ray splits generation and training batches across GPUs. FSDP normalizes
+    # the actor's PPO minibatch across its data-parallel groups.
+    compatible = [
+        gpus for gpus in range(1, available + 1)
+        if (world_size := gpus * hosts) % actor_sp == 0 and world_size % ref_sp == 0
+        and world_size % rollout_tp == 0 and minibatch % (world_size // actor_sp) == 0
+        and train_batch % world_size == 0 and gen_batch % world_size == 0
+    ]
     if requested is not None and requested not in compatible:
         raise SystemExit(
-            f"N_GPUS_PER_NODE={requested} is incompatible with {available} usable GPUs and "
-            f"a {minibatch}-sample PPO minibatch. Valid counts: {compatible}."
+            f"N_GPUS_PER_NODE={requested} is incompatible with this profile on {hosts} node(s) "
+            f"with {available} usable GPUs per node. Valid counts: {compatible}."
+        )
+    if not compatible:
+        raise SystemExit(
+            f"No compatible GPU count for this profile on {hosts} node(s) with {available} usable GPUs per node "
+            f"(actor sequence parallelism={actor_sp}, reference sequence parallelism={ref_sp}, "
+            f"rollout tensor parallelism={rollout_tp})."
         )
     selected = requested if requested is not None else compatible[-1]
     source = "override" if requested is not None else "auto"
     print(
-        f"[NSR CUDA launcher] selected GPUs={selected} ({source}); "
+        f"[NSR CUDA launcher] selected GPUs={selected} per node ({source}), total={selected * hosts}; "
         f"CUDA-visible={visible}, allocated={allocated}, usable={available}",
         file=sys.stderr,
         flush=True,
     )
-    print(selected)
+    return selected
 
 
 if __name__ == "__main__":
-    main()
+    print(select_gpu_count(*map(int, sys.argv[1:])))

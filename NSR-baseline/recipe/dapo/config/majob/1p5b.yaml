@@ -1,0 +1,32 @@
+# @package _global_
+
+defaults:
+  - common
+  - _self_
+
+majob:
+  model_id: Qwen/Qwen2.5-Math-1.5B
+  model_hidden_size: 1536
+  experiment_prefix: small
+
+data:
+  max_prompt_length: ${oc.decode:${oc.env:MAX_PROMPT_LENGTH,1024}}
+  max_response_length: ${oc.decode:${oc.env:MAX_RESPONSE_LENGTH,2048}}
+  gen_batch_size: 96
+  train_batch_size: 32
+
+actor_rollout_ref:
+  model:
+    path: ${oc.env:MODEL_PATH,${oc.env:RAY_DATA_HOME}/models/Qwen2.5-Math-1.5B}
+  actor:
+    ppo_mini_batch_size: 8
+    ppo_max_token_len_per_gpu: 6144
+    ulysses_sequence_parallel_size: 1
+  rollout:
+    n: 4
+    gpu_memory_utilization: 0.5
+    max_num_batched_tokens: null # majob.sh uses prompt length + response length.
+
+reward_model:
+  overlong_buffer:
+    len: 512

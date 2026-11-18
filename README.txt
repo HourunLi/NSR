@@ -1,21 +1,38 @@
-# ModelArts 1.5B 训练（单机，自动检测 GPU 数）
+# ModelArts 1.5B / 7B 训练（单机或多机，自动检测每节点 GPU 数）
 # 将仓库作为代码目录提交，以下命令假设任务中的目录名为 NSR。
-# 启动前检查代码、缓存、模型配置、Parquet 文件和 Conda 初始化脚本。
+# 启动前用 check 检查 YAML、模型配置、数据路径和 AIME 行数，无需 GPU。
 cd "${MA_JOB_DIR}/NSR" && bash majob.sh check
 
-# ModelArts 启动命令，先跑 baseline 300 步，成功后再跑 NSR 300 步。
+# 不传第二个参数时使用 Qwen/Qwen2.5-Math-1.5B。both 先跑 baseline，再跑 NSR。
 cd "${MA_JOB_DIR}/NSR" && bash majob.sh both
 
-# 也可以用 bash majob.sh baseline 或 bash majob.sh nsr 单独提交。
+# 使用 Qwen/Qwen2.5-Math-7B。请在下方下载步骤完成后执行。
+cd "${MA_JOB_DIR}/NSR" && bash majob.sh check 7b
+cd "${MA_JOB_DIR}/NSR" && bash majob.sh both 7b
+
+# 也可以用 bash majob.sh baseline 7b 或 bash majob.sh nsr 7b 单独提交。
+# 两节点共 16 卡时，选择 2 个实例、每实例 8 张 GPU，使用同一条自定义启动命令。
+# majob.sh 根据 MA_NUM_HOSTS、VC_TASK_INDEX 和 VC_WORKER_HOSTS 组建 Ray 集群。
+# 0 号节点在两台机器各有 8 张 GPU 加入 Ray 后提交训练。其他节点加入并等待。
+# 确保各节点可以访问同路径的模型、数据和共享 RUNS_DIR（FSDP checkpoint 由多节点共同写入）。
+# N_GPUS_PER_NODE 表示每节点卡数，可用 N_GPUS_PER_NODE=8 显式要求两节点各 8 卡。
+# Ray 默认使用 6379 端口，等待节点加入的上限为 300 秒，可通过 NSR_RAY_PORT 和 NSR_RAY_START_TIMEOUT 调整。
+# Hydra 配置位于 NSR-baseline/recipe/dapo/config/majob/。
+# 1p5b.yaml 和 7b.yaml 指定模型目录、长度、batch size 和并行度。
+# common.yaml 指定数据默认路径、训练步数（300）、优化器、评估及保存频率。
+# MODEL_PATH、TRAIN_FILE、TEST_FILE 可覆盖本地路径。配置中的训练步数可由各 YAML 覆盖。
 # 默认激活 nsr，Conda 安装位置不同可设置 CONDA_SH。
 # 作业日志中的 [NSR CUDA launcher ...] 记录实际 Python、Torch、NVIDIA 驱动和 CUDA 初始化结果。
 # Ray worker 无法选择 GPU 后端时，[NSR CUDA worker ...] 还会记录该进程分配到的 GPU ID。
 # 启动脚本优先查找系统驱动，并从运行时搜索路径中移除 ModelArts 注入的 CUDA 11.4 compat 目录。
-# majob.sh 保留作业的 CUDA_VISIBLE_DEVICES，并按实际可见和分配卡数选择能均分 PPO minibatch 的最大卡数。
-# 例如可用 4 卡时用 4 卡，可用 6 卡时用 4 卡。可用 N_GPUS_PER_NODE=2 显式指定卡数。
+# majob.sh 保留 CUDA_VISIBLE_DEVICES，按实际可用卡数、batch size 和并行度选择 GPU 数量。
+# 例如单节点有 6 张可用卡时两个预设都会选 4 张。可用 N_GPUS_PER_NODE=4 显式指定卡数。
+# 7B 复用 DAPO_baseline_7b.sh 的 4096-token 训练参数，使用 2 路序列并行。
+# 卡数通过检查后仍需满足显存要求。
 # 共享盘 NSR 根目录为 /home/ma-user/work/bucket-pangu-green/lihourun/NSR，
 # 对应开发机的 /data/lihourun/NSR。路径不同可设置 RAY_DATA_HOME。
-# HF 缓存沿用 niahLogKV 的 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。
+# ModelArts 的 HF 缓存默认位于 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。
+# 如需使用其他缓存目录，可设置 HF_HOME。
 # 离线运行前准备本地模型权重及训练和验证 Parquet，AIME 文件须有 960 行。
 # 每次启动会在 RAY_DATA_HOME/paper-runs 下新建 run-XXXXXXXX，两个实验各有一个子目录。
 # 可用 RUNS_DIR 指定输出根目录。重跑会从初始模型开始训练。
@@ -27,6 +44,8 @@ cd /data/lihourun/NSR
 conda activate nsr
 bash majob.sh check
 bash majob.sh both
+bash majob.sh check 7b
+bash majob.sh both 7b
 
 
 # 1.5B 模型下载

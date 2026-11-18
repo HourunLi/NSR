@@ -1,0 +1,115 @@
+# @package _global_
+
+majob:
+  # Use one independent sample for each of the 960 rows (30 AIME problems × 32).
+  validation_rows: 960
+
+data:
+  train_files: ${oc.env:TRAIN_FILE,${oc.env:RAY_DATA_HOME}/data/DAPO-Math-17k/data/dapo-math-17k.parquet}
+  val_files: ${oc.env:TEST_FILE,${oc.env:RAY_DATA_HOME}/data/AIME-2024/data/aime-2024.parquet}
+  prompt_key: prompt
+  truncation: left
+  filter_overlong_prompts: false
+  cache_dir: ${oc.env:RAY_DATA_HOME}/cache/verl/rlhf
+  custom_cls:
+    path: pkg://recipe.nsr.answer_format_dataset
+    name: AnswerFormatDataset
+  seed: 1
+
+actor_rollout_ref:
+  model:
+    use_remove_padding: true
+    enable_gradient_checkpointing: true
+  actor:
+    NSR: false # majob.sh selects this for each run.
+    nsr_delta: 0.1
+    use_random_adv: false
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.28
+    clip_ratio_c: 10.0
+    use_kl_loss: false
+    kl_loss_coef: 0.0
+    entropy_coeff: 0.0
+    loss_agg_mode: token-mean
+    policy_loss:
+      loss_mode: vanilla
+    ppo_epochs: 1
+    optim:
+      lr: 1.0e-6
+      lr_warmup_steps: 0
+      lr_warmup_steps_ratio: 0.0
+      warmup_style: constant
+      weight_decay: 0.1
+    grad_clip: 1.0
+    use_dynamic_bsz: true
+    fsdp_config:
+      fsdp_size: -1
+      param_offload: true
+      optimizer_offload: true
+    checkpoint:
+      save_contents: [model, optimizer, extra, hf_model]
+      load_contents: [model, optimizer, extra]
+  rollout:
+    name: vllm
+    tensor_model_parallel_size: 1
+    enforce_eager: true
+    enable_chunked_prefill: true
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    # Leave seed unset so repeated prompts sample independently within a batch.
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+    val_kwargs:
+      temperature: 1.0
+      top_p: 0.7
+      top_k: -1
+      do_sample: true
+      n: 1
+  ref:
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+    ulysses_sequence_parallel_size: ${actor_rollout_ref.actor.ulysses_sequence_parallel_size}
+    fsdp_config:
+      param_offload: true
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+  kl_ctrl:
+    kl_coef: 0.0
+  filter_groups:
+    enable: true
+    metric: acc
+    max_num_gen_batches: 10
+
+custom_reward_function:
+  path: ${oc.env:PWD}/recipe/nsr/answer_reward.py
+  name: compute_score
+
+reward_model:
+  reward_manager: dapo
+  overlong_buffer:
+    enable: true
+    penalty_factor: 1.0
+
+trainer:
+  logger: [console]
+  project_name: DAPO-paper-aligned
+  experiment_name: ${oc.env:EXP_NAME}
+  nnodes: 1
+  val_before_train: true
+  val_only: false
+  test_freq: 5
+  save_freq: 20
+  max_actor_ckpt_to_keep: 2
+  total_epochs: 3
+  total_training_steps: 300
+  resume_mode: disable
+  default_local_dir: ${oc.env:RUN_DIR}/checkpoints
+  rollout_data_dir: null
+  validation_data_dir: ${oc.env:RUN_DIR}/validation
+
+hydra:
+  run:
+    dir: ${oc.env:RUN_DIR}/hydra
