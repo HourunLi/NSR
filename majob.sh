@@ -78,7 +78,7 @@ for override in MODEL_PATH TRAIN_FILE TEST_FILE MAX_PROMPT_LENGTH MAX_RESPONSE_L
     fi
 done
 
-# Prefer the host driver as in LogKV. ModelArts can prepend a CUDA 11.4
+# Prefer the host CUDA driver. ModelArts can prepend a CUDA 11.4
 # forward-compatibility driver that shadows the host libcuda for cu124 Torch.
 cuda_library_dirs=(/usr/lib/x86_64-linux-gnu)
 IFS=: read -r -a inherited_library_dirs <<< "${LD_LIBRARY_PATH:-}"

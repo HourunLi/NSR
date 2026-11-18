@@ -25,7 +25,8 @@ cd "${MA_JOB_DIR}/NSR" && bash majob.sh both 7b
 # 卡数通过检查后仍需满足显存要求。
 # 共享盘 NSR 根目录为 /home/ma-user/work/bucket-pangu-green/lihourun/NSR，
 # 对应开发机的 /data/lihourun/NSR。路径不同可设置 RAY_DATA_HOME。
-# HF 缓存沿用 niahLogKV 的 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。
+# ModelArts 的 HF 缓存默认位于 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。
+# 如需使用其他缓存目录，可设置 HF_HOME。
 # 离线运行前准备本地模型权重及训练和验证 Parquet，AIME 文件须有 960 行。
 # 每次启动会在 RAY_DATA_HOME/paper-runs 下新建 run-XXXXXXXX，两个实验各有一个子目录。
 # 可用 RUNS_DIR 指定输出根目录。重跑会从初始模型开始训练。
