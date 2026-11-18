@@ -1,18 +1,28 @@
-# ModelArts 1.5B 训练（单机，自动检测 GPU 数）
+# ModelArts 1.5B / 7B 训练（单机，自动检测 GPU 数）
 # 将仓库作为代码目录提交，以下命令假设任务中的目录名为 NSR。
-# 启动前检查代码、缓存、模型配置、Parquet 文件和 Conda 初始化脚本。
+# 启动前用 check 检查 YAML、模型配置、数据路径和 AIME 行数，无需 GPU。
 cd "${MA_JOB_DIR}/NSR" && bash majob.sh check
 
-# ModelArts 启动命令，先跑 baseline 300 步，成功后再跑 NSR 300 步。
+# 不传第二个参数时使用 Qwen/Qwen2.5-Math-1.5B。both 先跑 baseline，再跑 NSR。
 cd "${MA_JOB_DIR}/NSR" && bash majob.sh both
 
-# 也可以用 bash majob.sh baseline 或 bash majob.sh nsr 单独提交。
+# 使用 Qwen/Qwen2.5-Math-7B。请在下方下载步骤完成后执行。
+cd "${MA_JOB_DIR}/NSR" && bash majob.sh check 7b
+cd "${MA_JOB_DIR}/NSR" && bash majob.sh both 7b
+
+# 也可以用 bash majob.sh baseline 7b 或 bash majob.sh nsr 7b 单独提交。
+# Hydra 配置位于 NSR-baseline/recipe/dapo/config/majob/。
+# 1p5b.yaml 和 7b.yaml 指定模型目录、长度、batch size 和并行度。
+# common.yaml 指定数据默认路径、训练步数（300）、优化器、评估及保存频率。
+# MODEL_PATH、TRAIN_FILE、TEST_FILE 可覆盖本地路径。配置中的训练步数可由各 YAML 覆盖。
 # 默认激活 nsr，Conda 安装位置不同可设置 CONDA_SH。
 # 作业日志中的 [NSR CUDA launcher ...] 记录实际 Python、Torch、NVIDIA 驱动和 CUDA 初始化结果。
 # Ray worker 无法选择 GPU 后端时，[NSR CUDA worker ...] 还会记录该进程分配到的 GPU ID。
 # 启动脚本优先查找系统驱动，并从运行时搜索路径中移除 ModelArts 注入的 CUDA 11.4 compat 目录。
-# majob.sh 保留作业的 CUDA_VISIBLE_DEVICES，并按实际可见和分配卡数选择能均分 PPO minibatch 的最大卡数。
-# 例如可用 4 卡时用 4 卡，可用 6 卡时用 4 卡。可用 N_GPUS_PER_NODE=2 显式指定卡数。
+# majob.sh 保留 CUDA_VISIBLE_DEVICES，按实际可用卡数、batch size 和并行度选择 GPU 数量。
+# 例如两个预设有 6 张可用卡时都会选 4 张。可用 N_GPUS_PER_NODE=4 显式指定卡数。
+# 7B 复用 DAPO_baseline_7b.sh 的 4096-token 训练参数，使用 2 路序列并行。
+# 卡数通过检查后仍需满足显存要求。
 # 共享盘 NSR 根目录为 /home/ma-user/work/bucket-pangu-green/lihourun/NSR，
 # 对应开发机的 /data/lihourun/NSR。路径不同可设置 RAY_DATA_HOME。
 # HF 缓存沿用 niahLogKV 的 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。
@@ -27,6 +37,8 @@ cd /data/lihourun/NSR
 conda activate nsr
 bash majob.sh check
 bash majob.sh both
+bash majob.sh check 7b
+bash majob.sh both 7b
 
 
 # 1.5B 模型下载

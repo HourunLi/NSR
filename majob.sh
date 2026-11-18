@@ -6,16 +6,21 @@ die() {
     exit 1
 }
 
+usage="Usage: bash majob.sh [both|baseline|nsr|check] [1.5b|7b]"
+(( $# <= 2 )) || die "$usage"
 mode=${1:-both}
 case "$mode" in
     both|baseline|nsr|check) ;;
-    *) die "Usage: bash majob.sh [both|baseline|nsr|check]" ;;
+    *) die "$usage" ;;
+esac
+case "${2:-1.5b}" in
+    1.5b) profile=1p5b ;;
+    7b) profile=7b ;;
+    *) die "$usage" ;;
 esac
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 cd "$repo_root/NSR-baseline" || die "Cannot find NSR-baseline in $repo_root"
-recipe=recipe/nsr/DAPO_baseline_1p5b.sh
-[[ -r "$recipe" ]] || die "Cannot read $PWD/$recipe"
 
 if [[ -n "${MA_JOB_DIR:-}" ]]; then
     shared=/home/ma-user/work/bucket-pangu-green/lihourun
@@ -25,9 +30,6 @@ else
     ray_data_home=${RAY_DATA_HOME:-$repo_root}
     hf_home=${HF_HOME:-$ray_data_home/cache/huggingface}
 fi
-model_path=${MODEL_PATH:-$ray_data_home/models/Qwen2.5-Math-1.5B}
-train_file=${TRAIN_FILE:-$ray_data_home/data/DAPO-Math-17k/data/dapo-math-17k.parquet}
-test_file=${TEST_FILE:-$ray_data_home/data/AIME-2024/data/aime-2024.parquet}
 runs_dir=${RUNS_DIR:-$ray_data_home/paper-runs}
 conda_env=${CONDA_ENV:-nsr}
 conda_sh=${CONDA_SH:-}
@@ -40,23 +42,16 @@ if [[ -z "$conda_sh" && "${CONDA_DEFAULT_ENV:-}" != "$conda_env" ]]; then
     fi
 fi
 
-printf 'Repo: %s\nHF cache: %s\nNSR data: %s\nModel: %s\nTrain data: %s\nAIME data: %s\nRuns: %s\nConda: %s (%s)\n' \
-    "$repo_root" "$hf_home" "$ray_data_home" "$model_path" "$train_file" "$test_file" \
+printf 'Repo: %s\nHF cache: %s\nNSR data: %s\nRuns: %s\nConda: %s (%s)\n' \
+    "$repo_root" "$hf_home" "$ray_data_home" \
     "$runs_dir" "${conda_sh:-active environment}" "$conda_env"
 
-[[ -r "$model_path/config.json" ]] || die "Cannot read model config: $model_path/config.json"
-[[ -r "$train_file" ]] || die "Cannot read training data: $train_file"
-[[ -r "$test_file" ]] || die "Cannot read AIME data: $test_file"
 if [[ -n "${MA_JOB_DIR:-}" ]]; then
     [[ -d "$hf_home" && -x "$hf_home" ]] || die "Cannot access HF cache: $hf_home"
 fi
 if [[ -n "$conda_sh" ]]; then
     [[ -r "$conda_sh" ]] || die "Cannot read conda.sh: $conda_sh (set CONDA_SH)"
 fi
-if [[ "$mode" == check ]]; then
-    exit 0
-fi
-
 if [[ -n "$conda_sh" ]]; then
     source "$conda_sh"
     conda activate "$conda_env" || die "Cannot activate the NSR conda environment"
@@ -75,6 +70,13 @@ export TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1
 # 复用仓库的导入路径隔离，避免 ModelArts 的 .pth 注入其他环境的包。
 export PYTHONPATH="$PWD:$repo_root/NSR-main/baseline_4gpu/pathfix"
 export BASELINE_ENV_ONLY=1
+export RAY_DATA_HOME="$ray_data_home"
+for override in MODEL_PATH TRAIN_FILE TEST_FILE MAX_PROMPT_LENGTH MAX_RESPONSE_LENGTH; do
+    # Keep empty path/length overrides equivalent to an unset environment variable.
+    if [[ -z "${!override:-}" ]]; then
+        unset "$override"
+    fi
+done
 
 # Prefer the host driver as in LogKV. ModelArts can prepend a CUDA 11.4
 # forward-compatibility driver that shadows the host libcuda for cu124 Torch.
@@ -89,16 +91,17 @@ done
 printf -v LD_LIBRARY_PATH '%s:' "${cuda_library_dirs[@]}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH%:}"
 
-export RAY_DATA_HOME="$ray_data_home" MODEL_PATH="$model_path"
-export TRAIN_FILE="$train_file" TEST_FILE="$test_file"
-export NNODES=1
 export NCCL_NVLS_ENABLE=0 NCCL_NET_PLUGIN=none NCCL_IB_TIMEOUT=22
 export NSR_LOG_CUDA_STARTUP=1
+export VLLM_USE_V1=0 RAY_ADDRESS=local
 unset PYTORCH_CUDA_ALLOC_CONF
 
-N_GPUS_PER_NODE=$(python3 verl/utils/cuda_diagnostics.py)
-[[ "$N_GPUS_PER_NODE" =~ ^[1-9][0-9]*$ ]] || die "GPU detection did not return a valid GPU count"
-export N_GPUS_PER_NODE
+if [[ "$mode" == check ]]; then
+    python3 recipe/nsr/majob_preflight.py "$profile" --check
+    exit 0
+fi
+launch_settings=$(python3 recipe/nsr/majob_preflight.py "$profile")
+read -r run_prefix steps max_batched_tokens gpu_count <<< "$launch_settings"
 
 local_tmp=$(mktemp -d /tmp/nsr.XXXXXXXX)
 export TMPDIR="$local_tmp" RAY_TMPDIR="$local_tmp"
@@ -109,13 +112,17 @@ printf 'Ray temp: %s\nRun output: %s\n' "$RAY_TMPDIR" "$batch_dir"
 
 run_training() {
     local label=$1 enable_nsr=$2
-    local name="small-${label}-300"
+    local name="${run_prefix}-${label}-${steps}"
     local run_dir="$batch_dir/$name"
 
-    mkdir -- "$run_dir"
+    mkdir -p -- "$run_dir/validation" "$run_dir/checkpoints"
     printf 'Starting %s | output: %s\n' "$name" "$run_dir"
-    NSR="$enable_nsr" STEPS=300 EXP_NAME="$name" RUN_DIR="$run_dir" VAL_ONLY=false \
-        bash "$recipe" 2>&1 | tee "$run_dir/train.log"
+    EXP_NAME="$name" RUN_DIR="$run_dir" \
+        python3 -m recipe.dapo.main_dapo "majob=$profile" \
+        "actor_rollout_ref.actor.NSR=$enable_nsr" \
+        "actor_rollout_ref.rollout.max_num_batched_tokens=$max_batched_tokens" \
+        "trainer.n_gpus_per_node=$gpu_count" "ray_init.num_cpus=$((gpu_count + 2))" \
+        2>&1 | tee "$run_dir/train.log"
 }
 
 case "$mode" in

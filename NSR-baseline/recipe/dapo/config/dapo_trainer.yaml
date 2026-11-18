@@ -5,6 +5,7 @@ hydra:
 defaults:
   - ppo_trainer
   - _self_
+  - optional majob: null
 
 data:
   gen_batch_size: ${data.train_batch_size}

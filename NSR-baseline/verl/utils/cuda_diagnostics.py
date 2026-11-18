@@ -67,8 +67,7 @@ def report_cuda(role):
             log(f"loaded CUDA libraries: {', '.join(sorted(libs)) or '(none)'}")
 
 
-def main():
-    # majob.sh captures stdout to pass the selected count to the training recipe.
+def select_gpu_count(minibatch=32, train_batch=128, gen_batch=384, actor_sp=1, ref_sp=1, rollout_tp=1):
     with redirect_stdout(sys.stderr):
         visible = report_cuda("launcher")
     if visible is None:
@@ -81,19 +80,28 @@ def main():
     except ValueError as error:
         raise SystemExit("MA_NUM_HOSTS, MA_NUM_GPUS and N_GPUS_PER_NODE must be integers.") from error
     if hosts != 1:
-        raise SystemExit(f"The NSR 1.5B launcher needs one host; the job has {hosts}.")
+        raise SystemExit(f"The NSR launcher needs one host; the job has {hosts}.")
     available = min(allocated, visible)
     if available < 1:
         raise SystemExit(f"No usable GPUs: {allocated} allocated, {visible} CUDA-visible.")
 
-    # DAPO_baseline_1p5b.sh uses 8 prompts per PPO minibatch, with 4 rollouts each.
-    # Its generation and training batches are also multiples of these 32 samples.
-    minibatch = 8 * 4
-    compatible = [n for n in range(1, min(available, minibatch) + 1) if minibatch % n == 0]
+    # Ray splits generation and training batches across GPUs. FSDP normalizes
+    # the actor's PPO minibatch across its data-parallel groups.
+    compatible = [
+        n for n in range(1, available + 1)
+        if n % actor_sp == 0 and n % ref_sp == 0 and n % rollout_tp == 0
+        and minibatch % (n // actor_sp) == 0 and train_batch % n == 0 and gen_batch % n == 0
+    ]
     if requested is not None and requested not in compatible:
         raise SystemExit(
-            f"N_GPUS_PER_NODE={requested} is incompatible with {available} usable GPUs and "
-            f"a {minibatch}-sample PPO minibatch. Valid counts: {compatible}."
+            f"N_GPUS_PER_NODE={requested} is incompatible with this profile and {available} usable GPUs. "
+            f"Valid counts: {compatible}."
+        )
+    if not compatible:
+        raise SystemExit(
+            f"No compatible GPU count for this profile with {available} usable GPUs "
+            f"(actor sequence parallelism={actor_sp}, reference sequence parallelism={ref_sp}, "
+            f"rollout tensor parallelism={rollout_tp})."
         )
     selected = requested if requested is not None else compatible[-1]
     source = "override" if requested is not None else "auto"
@@ -103,8 +111,8 @@ def main():
         file=sys.stderr,
         flush=True,
     )
-    print(selected)
+    return selected
 
 
 if __name__ == "__main__":
-    main()
+    print(select_gpu_count(*map(int, sys.argv[1:])))
