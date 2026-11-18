@@ -38,12 +38,14 @@ def run_ppo(config) -> None:
     OmegaConf.resolve(config)
     if not ray.is_initialized():
         address = os.environ.get("RAY_ADDRESS")
+        local_ray = address in (None, "", "local")
         ray.init(
             address=address,
+            _node_ip_address=None if local_ray else os.getenv("NSR_RAY_NODE_IP"),
             runtime_env={
                 "env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}
             },
-            num_cpus=config.ray_init.num_cpus if address in (None, "", "local") else None,
+            num_cpus=config.ray_init.num_cpus if local_ray else None,
         )
 
     if (
