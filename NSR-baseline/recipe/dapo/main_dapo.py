@@ -34,13 +34,16 @@ def main(config):
 
 
 def run_ppo(config) -> None:
+    # Resolve per-run environment variables on the driver before sending the config to other nodes.
+    OmegaConf.resolve(config)
     if not ray.is_initialized():
-        # this is for local ray cluster
+        address = os.environ.get("RAY_ADDRESS")
         ray.init(
+            address=address,
             runtime_env={
                 "env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}
             },
-            num_cpus=config.ray_init.num_cpus,
+            num_cpus=config.ray_init.num_cpus if address in (None, "", "local") else None,
         )
 
     if (
@@ -68,7 +71,6 @@ class TaskRunner:
         print(f"TaskRunner hostname: {socket.gethostname()}, PID: {os.getpid()}")
 
         pprint(OmegaConf.to_container(config, resolve=True))  # resolve=True will eval symbol values
-        OmegaConf.resolve(config)
 
         # download the checkpoint from hdfs
         local_path = copy_to_local(config.actor_rollout_ref.model.path)

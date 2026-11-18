@@ -22,6 +22,9 @@ esac
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 cd "$repo_root/NSR-baseline" || die "Cannot find NSR-baseline in $repo_root"
 
+nnodes=${MA_NUM_HOSTS:-${VC_WORKER_NUM:-1}}
+[[ "$nnodes" =~ ^[1-9][0-9]*$ ]] || die "Invalid ModelArts node count: $nnodes"
+
 if [[ -n "${MA_JOB_DIR:-}" ]]; then
     shared=/home/ma-user/work/bucket-pangu-green/lihourun
     ray_data_home=${RAY_DATA_HOME:-$shared/NSR}
@@ -91,9 +94,11 @@ done
 printf -v LD_LIBRARY_PATH '%s:' "${cuda_library_dirs[@]}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH%:}"
 
-export NCCL_NVLS_ENABLE=0 NCCL_NET_PLUGIN=none NCCL_IB_TIMEOUT=22
+if (( nnodes == 1 )); then
+    export NCCL_NVLS_ENABLE=0 NCCL_NET_PLUGIN=none NCCL_IB_TIMEOUT=22
+fi
 export NSR_LOG_CUDA_STARTUP=1
-export VLLM_USE_V1=0 RAY_ADDRESS=local
+export VLLM_USE_V1=0
 unset PYTORCH_CUDA_ALLOC_CONF
 
 if [[ "$mode" == check ]]; then
@@ -105,6 +110,51 @@ read -r run_prefix steps max_batched_tokens gpu_count <<< "$launch_settings"
 
 local_tmp=$(mktemp -d /tmp/nsr.XXXXXXXX)
 export TMPDIR="$local_tmp" RAY_TMPDIR="$local_tmp"
+
+ray_init_args=()
+if (( nnodes == 1 )); then
+    export RAY_ADDRESS=local
+    ray_init_args+=("ray_init.num_cpus=$((gpu_count + 2))")
+else
+    rank=${VC_TASK_INDEX:-}
+    [[ "$rank" =~ ^(0|[1-9][0-9]*)$ ]] && (( rank < nnodes )) ||
+        die "Multi-node training needs a VC_TASK_INDEX between 0 and $((nnodes - 1))"
+    IFS=, read -r -a node_hosts <<< "${VC_WORKER_HOSTS:-}"
+    (( ${#node_hosts[@]} == nnodes )) && [[ -n "${node_hosts[0]}" && -n "${node_hosts[rank]}" ]] ||
+        die "VC_WORKER_HOSTS must list the $nnodes ModelArts nodes in rank order"
+    ray_port=${NSR_RAY_PORT:-6379}
+    ray_timeout=${NSR_RAY_START_TIMEOUT:-300}
+    [[ "$ray_port" =~ ^[1-9][0-9]{0,4}$ ]] && (( ray_port <= 65535 )) ||
+        die "NSR_RAY_PORT must be an integer between 1 and 65535"
+    [[ "$ray_timeout" =~ ^[1-9][0-9]*$ ]] || die "NSR_RAY_START_TIMEOUT must be a positive number of seconds"
+    export RAY_ADDRESS="${node_hosts[0]}:$ray_port" RAY_USAGE_STATS_ENABLED=0
+    printf 'Ray cluster: node %s/%s, %s GPUs per node, head %s\n' "$rank" "$nnodes" "$gpu_count" "$RAY_ADDRESS"
+
+    ray_args=(--block "--num-gpus=$gpu_count" "--num-cpus=$((gpu_count + 2))")
+    if [[ -n "${MA_CURRENT_IP:-}" ]]; then
+        ray_args+=("--node-ip-address=$MA_CURRENT_IP")
+    fi
+    if (( rank == 0 )); then
+        ray_args+=(--head "--port=$ray_port" --include-dashboard=false)
+    else
+        python3 recipe/nsr/majob_ray.py wait-head "$ray_timeout"
+        ray_args+=("--address=$RAY_ADDRESS")
+    fi
+    ray start "${ray_args[@]}" &
+    ray_pid=$!
+    # Ray's --block process owns this node's Ray services and reaps them on SIGTERM.
+    trap 'kill -TERM "$ray_pid" 2>/dev/null || true; wait "$ray_pid" 2>/dev/null || true' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if (( rank != 0 )); then
+        python3 recipe/nsr/majob_ray.py wait-stop "$ray_pid"
+        exit 0
+    fi
+    timeout --kill-after=5s "$((ray_timeout + 10))" \
+        python3 recipe/nsr/majob_ray.py wait-workers "$ray_timeout" "$ray_pid" "$nnodes" "$gpu_count" ||
+        die "Ray cluster startup failed. See the Ray logs on all ModelArts nodes."
+fi
+
 mkdir -p -- "$runs_dir"
 batch_dir=$(mktemp -d -- "$runs_dir/run-XXXXXXXX") ||
     die "Cannot create a run directory under $runs_dir"
@@ -121,7 +171,7 @@ run_training() {
         python3 -m recipe.dapo.main_dapo "majob=$profile" \
         "actor_rollout_ref.actor.NSR=$enable_nsr" \
         "actor_rollout_ref.rollout.max_num_batched_tokens=$max_batched_tokens" \
-        "trainer.n_gpus_per_node=$gpu_count" "ray_init.num_cpus=$((gpu_count + 2))" \
+        "trainer.nnodes=$nnodes" "trainer.n_gpus_per_node=$gpu_count" "${ray_init_args[@]}" \
         2>&1 | tee "$run_dir/train.log"
 }
 

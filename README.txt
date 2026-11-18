@@ -1,4 +1,4 @@
-# ModelArts 1.5B / 7B 训练（单机，自动检测 GPU 数）
+# ModelArts 1.5B / 7B 训练（单机或多机，自动检测每节点 GPU 数）
 # 将仓库作为代码目录提交，以下命令假设任务中的目录名为 NSR。
 # 启动前用 check 检查 YAML、模型配置、数据路径和 AIME 行数，无需 GPU。
 cd "${MA_JOB_DIR}/NSR" && bash majob.sh check
@@ -11,6 +11,12 @@ cd "${MA_JOB_DIR}/NSR" && bash majob.sh check 7b
 cd "${MA_JOB_DIR}/NSR" && bash majob.sh both 7b
 
 # 也可以用 bash majob.sh baseline 7b 或 bash majob.sh nsr 7b 单独提交。
+# 两节点共 16 卡时，选择 2 个实例、每实例 8 张 GPU，使用同一条自定义启动命令。
+# majob.sh 根据 MA_NUM_HOSTS、VC_TASK_INDEX 和 VC_WORKER_HOSTS 组建 Ray 集群。
+# 0 号节点在两台机器各有 8 张 GPU 加入 Ray 后提交训练。其他节点加入并等待。
+# 确保各节点可以访问同路径的模型、数据和共享 RUNS_DIR（FSDP checkpoint 由多节点共同写入）。
+# N_GPUS_PER_NODE 表示每节点卡数，可用 N_GPUS_PER_NODE=8 显式要求两节点各 8 卡。
+# Ray 默认使用 6379 端口，等待节点加入的上限为 300 秒，可通过 NSR_RAY_PORT 和 NSR_RAY_START_TIMEOUT 调整。
 # Hydra 配置位于 NSR-baseline/recipe/dapo/config/majob/。
 # 1p5b.yaml 和 7b.yaml 指定模型目录、长度、batch size 和并行度。
 # common.yaml 指定数据默认路径、训练步数（300）、优化器、评估及保存频率。
@@ -20,7 +26,7 @@ cd "${MA_JOB_DIR}/NSR" && bash majob.sh both 7b
 # Ray worker 无法选择 GPU 后端时，[NSR CUDA worker ...] 还会记录该进程分配到的 GPU ID。
 # 启动脚本优先查找系统驱动，并从运行时搜索路径中移除 ModelArts 注入的 CUDA 11.4 compat 目录。
 # majob.sh 保留 CUDA_VISIBLE_DEVICES，按实际可用卡数、batch size 和并行度选择 GPU 数量。
-# 例如两个预设有 6 张可用卡时都会选 4 张。可用 N_GPUS_PER_NODE=4 显式指定卡数。
+# 例如单节点有 6 张可用卡时两个预设都会选 4 张。可用 N_GPUS_PER_NODE=4 显式指定卡数。
 # 7B 复用 DAPO_baseline_7b.sh 的 4096-token 训练参数，使用 2 路序列并行。
 # 卡数通过检查后仍需满足显存要求。
 # 共享盘 NSR 根目录为 /home/ma-user/work/bucket-pangu-green/lihourun/NSR，
