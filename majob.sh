@@ -78,13 +78,14 @@ export BASELINE_ENV_ONLY=1
 
 export RAY_DATA_HOME="$ray_data_home" MODEL_PATH="$model_path"
 export TRAIN_FILE="$train_file" TEST_FILE="$test_file"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES-0,1,2,3,4,5,6,7}"
-export N_GPUS_PER_NODE=8 NNODES=1
+export NNODES=1
 export NCCL_NVLS_ENABLE=0 NCCL_NET_PLUGIN=none NCCL_IB_TIMEOUT=22
 export NSR_LOG_CUDA_STARTUP=1
 unset PYTORCH_CUDA_ALLOC_CONF
 
-python3 verl/utils/cuda_diagnostics.py
+N_GPUS_PER_NODE=$(python3 verl/utils/cuda_diagnostics.py)
+[[ "$N_GPUS_PER_NODE" =~ ^[1-9][0-9]*$ ]] || die "GPU detection did not return a valid GPU count"
+export N_GPUS_PER_NODE
 
 local_tmp=$(mktemp -d /tmp/nsr.XXXXXXXX)
 export TMPDIR="$local_tmp" RAY_TMPDIR="$local_tmp"

@@ -1,4 +1,4 @@
-# ModelArts 1.5B 训练（单机八卡）
+# ModelArts 1.5B 训练（单机，自动检测 GPU 数）
 # 将仓库作为代码目录提交，以下命令假设任务中的目录名为 NSR。
 # 启动前检查代码、缓存、模型配置、Parquet 文件和 Conda 初始化脚本。
 cd "${MA_JOB_DIR}/NSR" && bash majob.sh check
@@ -10,6 +10,8 @@ cd "${MA_JOB_DIR}/NSR" && bash majob.sh both
 # 默认激活 nsr，Conda 安装位置不同可设置 CONDA_SH。
 # 作业日志中的 [NSR CUDA launcher ...] 记录实际 Python、Torch、NVIDIA 驱动和 CUDA 初始化结果。
 # Ray worker 无法选择 GPU 后端时，[NSR CUDA worker ...] 还会记录该进程分配到的 GPU ID。
+# majob.sh 保留作业的 CUDA_VISIBLE_DEVICES，并按实际可见和分配卡数选择能均分 PPO minibatch 的最大卡数。
+# 例如可用 4 卡时用 4 卡，可用 6 卡时用 4 卡。可用 N_GPUS_PER_NODE=2 显式指定卡数。
 # 共享盘 NSR 根目录为 /home/ma-user/work/bucket-pangu-green/lihourun/NSR，
 # 对应开发机的 /data/lihourun/NSR。路径不同可设置 RAY_DATA_HOME。
 # HF 缓存沿用 niahLogKV 的 /home/ma-user/work/bucket-pangu-green/lihourun/data/hf_cache。

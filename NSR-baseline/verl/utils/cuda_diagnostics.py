@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 
@@ -67,18 +68,42 @@ def report_cuda(role):
 
 
 def main():
-    visible = report_cuda("launcher")
+    # majob.sh captures stdout to pass the selected count to the training recipe.
+    with redirect_stdout(sys.stderr):
+        visible = report_cuda("launcher")
     if visible is None:
         raise SystemExit("NSR CUDA preflight failed. See the launcher diagnostics above.")
 
-    hosts = int(os.environ.get("MA_NUM_HOSTS") or 1)
-    required = int(os.environ["N_GPUS_PER_NODE"])
-    allocated = int(os.environ.get("MA_NUM_GPUS") or required)
-    if hosts != 1 or min(allocated, visible) < required:
+    try:
+        hosts = int(os.environ.get("MA_NUM_HOSTS") or 1)
+        allocated = int(os.environ.get("MA_NUM_GPUS") or visible)
+        requested = int(os.environ["N_GPUS_PER_NODE"]) if os.environ.get("N_GPUS_PER_NODE") else None
+    except ValueError as error:
+        raise SystemExit("MA_NUM_HOSTS, MA_NUM_GPUS and N_GPUS_PER_NODE must be integers.") from error
+    if hosts != 1:
+        raise SystemExit(f"The NSR 1.5B launcher needs one host; the job has {hosts}.")
+    available = min(allocated, visible)
+    if available < 1:
+        raise SystemExit(f"No usable GPUs: {allocated} allocated, {visible} CUDA-visible.")
+
+    # DAPO_baseline_1p5b.sh uses 8 prompts per PPO minibatch, with 4 rollouts each.
+    # Its generation and training batches are also multiples of these 32 samples.
+    minibatch = 8 * 4
+    compatible = [n for n in range(1, min(available, minibatch) + 1) if minibatch % n == 0]
+    if requested is not None and requested not in compatible:
         raise SystemExit(
-            f"Need one host with {required} GPUs. "
-            f"Job has {hosts} host(s), {allocated} allocated GPUs, {visible} visible GPUs."
+            f"N_GPUS_PER_NODE={requested} is incompatible with {available} usable GPUs and "
+            f"a {minibatch}-sample PPO minibatch. Valid counts: {compatible}."
         )
+    selected = requested if requested is not None else compatible[-1]
+    source = "override" if requested is not None else "auto"
+    print(
+        f"[NSR CUDA launcher] selected GPUs={selected} ({source}); "
+        f"CUDA-visible={visible}, allocated={allocated}, usable={available}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(selected)
 
 
 if __name__ == "__main__":
