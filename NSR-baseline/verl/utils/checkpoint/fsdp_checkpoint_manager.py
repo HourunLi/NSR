@@ -15,8 +15,11 @@
 import json
 import logging
 import os
+import shutil
+import tempfile
 import warnings
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Optional, Union
 
 import torch
@@ -37,6 +40,21 @@ from .checkpoint_manager import BaseCheckpointManager
 # Setup logging
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
+
+
+def _save_hf_model(model, destination, state_dict):
+    # safetensors preallocates and renames files, which some shared mounts reject.
+    # Serialize in the node-local temp directory, then write regular files to the checkpoint.
+    with tempfile.TemporaryDirectory(prefix="verl-hf-export-") as staging_dir:
+        model.save_pretrained(staging_dir, state_dict=state_dict)
+        staging = Path(staging_dir)
+        destination = Path(destination)
+        for source in staging.rglob("*"):
+            if source.is_file():
+                target = destination / source.relative_to(staging)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with source.open("rb") as input_file, target.open("wb") as output_file:
+                    shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
 
 
 @dataclass
@@ -328,7 +346,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                             f"in, using a generation config created from the model config when saving hf_model."
                         )
 
-                save_model.save_pretrained(hf_local_path, state_dict=state_dict)
+                _save_hf_model(save_model, hf_local_path, state_dict)
                 log_with_rank(
                     f"Saved hf_model to {os.path.abspath(hf_local_path)}",
                     rank=self.rank,
