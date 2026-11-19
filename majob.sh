@@ -127,17 +127,24 @@ else
     [[ "$ray_port" =~ ^[1-9][0-9]{0,4}$ ]] && (( ray_port <= 65535 )) ||
         die "NSR_RAY_PORT must be an integer between 1 and 65535"
     [[ "$ray_timeout" =~ ^[1-9][0-9]*$ ]] || die "NSR_RAY_START_TIMEOUT must be a positive number of seconds"
-    export RAY_ADDRESS="${node_hosts[0]}:$ray_port" RAY_USAGE_STATS_ENABLED=0
-    printf 'Ray cluster: node %s/%s, %s GPUs per node, head %s\n' "$rank" "$nnodes" "$gpu_count" "$RAY_ADDRESS"
-
-    ray_args=(--block "--num-gpus=$gpu_count" "--num-cpus=$((gpu_count + 2))")
-    if [[ -n "${MA_CURRENT_IP:-}" ]]; then
-        ray_args+=("--node-ip-address=$MA_CURRENT_IP")
+    node_host=${MA_CURRENT_IP:-${node_hosts[rank]}}
+    node_ip=$(python3 -c 'import socket, sys; print(socket.gethostbyname(sys.argv[1]))' "$node_host") ||
+        die "Cannot resolve this node's Ray IP from $node_host"
+    export NSR_RAY_NODE_IP="$node_ip" RAY_USAGE_STATS_ENABLED=0
+    if (( rank == 0 )); then
+        ray_head_ip=$node_ip
+    else
+        export RAY_ADDRESS="${node_hosts[0]}:$ray_port"
+        ray_head_ip=$(python3 recipe/nsr/majob_ray.py wait-head "$ray_timeout")
     fi
+    export RAY_ADDRESS="$ray_head_ip:$ray_port"
+    printf 'Ray cluster: node %s/%s at %s, %s GPUs per node, head %s\n' \
+        "$rank" "$nnodes" "$NSR_RAY_NODE_IP" "$gpu_count" "$RAY_ADDRESS"
+
+    ray_args=(--block "--node-ip-address=$NSR_RAY_NODE_IP" "--num-gpus=$gpu_count" "--num-cpus=$((gpu_count + 2))")
     if (( rank == 0 )); then
         ray_args+=(--head "--port=$ray_port" --include-dashboard=false)
     else
-        python3 recipe/nsr/majob_ray.py wait-head "$ray_timeout"
         ray_args+=("--address=$RAY_ADDRESS")
     fi
     ray start "${ray_args[@]}" &
