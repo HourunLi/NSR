@@ -19,6 +19,11 @@ data:
 actor_rollout_ref:
   model:
     path: ${oc.env:MODEL_PATH,${oc.env:RAY_DATA_HOME}/models/Qwen2.5-Math-7B}
+    # Use the base checkpoint's native context for actor training and vLLM.
+    override_config:
+      max_position_embeddings: 4096
+      rope_theta: 10000.0
+      rope_scaling: null
   actor:
     ppo_mini_batch_size: 32
     ppo_max_token_len_per_gpu: 10240
@@ -27,6 +32,9 @@ actor_rollout_ref:
     n: 16
     gpu_memory_utilization: 0.6
     max_num_batched_tokens: 10240
+    engine_kwargs:
+      vllm:
+        hf_overrides: ${actor_rollout_ref.model.override_config}
 
 reward_model:
   overlong_buffer:

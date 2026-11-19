@@ -9,6 +9,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
+from omegaconf import OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
 
@@ -23,19 +24,24 @@ def check_inputs(config):
     )
 
     model = json.loads((model_path / "config.json").read_text(encoding="utf-8"))
+    overrides = OmegaConf.to_container(config.actor_rollout_ref.model.override_config, resolve=True)
+    effective_model = {**model, **overrides}
     if (
         model.get("model_type") != "qwen2"
         or model.get("hidden_size") != config.majob.model_hidden_size
-        or model.get("max_position_embeddings") != 4096
-        or float(model.get("rope_theta", 0)) != 10000.0
-        or model.get("rope_scaling") is not None
+        or effective_model.get("max_position_embeddings") != 4096
+        or float(effective_model.get("rope_theta", 0)) != 10000.0
+        or effective_model.get("rope_scaling") is not None
     ):
-        raise ValueError(f"{model_path}/config.json must match the original {config.majob.model_id} model.")
+        raise ValueError(f"The model at {model_path} must match the native {config.majob.model_id} profile.")
+    changes = {key: value for key, value in overrides.items() if model.get(key) != value}
+    if changes:
+        print(f"Applying model config overrides for this run: {changes}", file=sys.stderr)
 
     prompt = config.data.max_prompt_length
     response = config.data.max_response_length
     buffer = config.reward_model.overlong_buffer.len
-    context = model["max_position_embeddings"]
+    context = effective_model["max_position_embeddings"]
     if (
         type(prompt) is not int or type(response) is not int
         or prompt < 1 or response <= buffer or prompt + response > context
