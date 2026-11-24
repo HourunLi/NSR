@@ -17,7 +17,7 @@ This trainer supports model-agonistic model initialization with huggingface
 """
 
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from copy import deepcopy
 from pprint import pprint
 
@@ -42,6 +42,26 @@ from verl.trainer.ppo.ray_trainer import (
 )
 from verl.utils.profiler import marked_timer
 import verl.utils.torch_functional as verl_F
+
+
+def _group_filter_stats(batch, prompt_metrics, metric_name, max_response_length):
+    responses_at_limit = (compute_response_mask(batch).sum(dim=-1) >= max_response_length).cpu().numpy()
+    stats = {
+        "seen_groups": len(prompt_metrics),
+        "responses": len(responses_at_limit),
+        "responses_at_length_limit": int(np.count_nonzero(responses_at_limit)),
+    }
+    if metric_name == "acc":
+        stats["all_wrong_groups"] = sum(all(value == 0 for value in values) for values in prompt_metrics.values())
+        stats["all_correct_groups"] = sum(all(value == 1 for value in values) for values in prompt_metrics.values())
+
+    predictions = batch.non_tensor_batch.get("pred")
+    if predictions is not None:
+        unparsed = predictions == "[INVALID]"
+        stats["unparsed_answers"] = int(np.count_nonzero(unparsed))
+        stats["unparsed_at_length_limit"] = int(np.count_nonzero(unparsed & responses_at_limit))
+
+    return stats
 
 
 class RayDAPOTrainer(RayPPOTrainer):
@@ -93,6 +113,7 @@ class RayDAPOTrainer(RayPPOTrainer):
         batch = None
         num_prompt_in_batch = 0
         num_gen_batches = 0
+        group_filter_stats = Counter()
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 do_profile = self.global_steps in (self.config.trainer.profile_steps or [])
@@ -225,6 +246,23 @@ class RayDAPOTrainer(RayPPOTrainer):
                         ]
                         num_prompt_in_batch += len(kept_prompt_uids)
 
+                        prompt_bsz = self.config.data.train_batch_size
+                        if num_prompt_in_batch < prompt_bsz:
+                            group_filter_stats.update(
+                                _group_filter_stats(
+                                    new_batch, prompt_uid2metric_vals, metric_name, self.config.data.max_response_length
+                                )
+                            )
+                            max_num_gen_batches = self.config.algorithm.filter_groups.max_num_gen_batches
+                            summary = (
+                                f"step={self.global_steps} metric={metric_name} "
+                                f"{num_gen_batches=} {max_num_gen_batches=} kept_groups={num_prompt_in_batch}/{prompt_bsz} "
+                                + " ".join(f"{name}={count}" for name, count in group_filter_stats.items())
+                            )
+                            print(f"[DAPO group filter] {summary}", flush=True)
+                            if 0 < max_num_gen_batches <= num_gen_batches:
+                                raise ValueError(f"DAPO group filter reached the generation batch limit. {summary}")
+
                         kept_traj_idxs = []
                         for idx, traj_from_prompt_uid in enumerate(new_batch.non_tensor_batch["uid"]):
                             if traj_from_prompt_uid in kept_prompt_uids:
@@ -233,24 +271,12 @@ class RayDAPOTrainer(RayPPOTrainer):
                         new_batch = new_batch[kept_traj_idxs]
                         batch = new_batch if batch is None else DataProto.concat([batch, new_batch])
 
-                        prompt_bsz = self.config.data.train_batch_size
                         if num_prompt_in_batch < prompt_bsz:
-                            print(f"{num_prompt_in_batch=} < {prompt_bsz=}")
-                            max_num_gen_batches = self.config.algorithm.filter_groups.max_num_gen_batches
-                            if max_num_gen_batches <= 0 or num_gen_batches < max_num_gen_batches:
-                                print(f"{num_gen_batches=}. Keep generating...")
-                                progress_bar.update(1)
-                                continue
-                            else:
-                                raise ValueError(
-                                    f"{num_gen_batches=} >= {max_num_gen_batches=}."
-                                    + " Generated too many. Please check if your data are too difficult."
-                                    + " You could also try set max_num_gen_batches=0 to enable endless trials."
-                                )
-                        else:
-                            # Align the batch
-                            traj_bsz = self.config.data.train_batch_size * self.config.actor_rollout_ref.rollout.n
-                            batch = batch[:traj_bsz]
+                            progress_bar.update(1)
+                            continue
+                        # Align the batch
+                        traj_bsz = prompt_bsz * self.config.actor_rollout_ref.rollout.n
+                        batch = batch[:traj_bsz]
 
                     # === Updating ===
 
@@ -393,6 +419,7 @@ class RayDAPOTrainer(RayPPOTrainer):
                 batch = None
                 num_prompt_in_batch = 0
                 num_gen_batches = 0
+                group_filter_stats.clear()
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
