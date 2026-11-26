@@ -1,0 +1,70 @@
+for qwen 7b result
+
+Training Progress: 759it [43:37:15, 189.15s/it]
+[36m(TaskRunner pid=4200)[0m step:273 - global_seqlen/min:217103 - global_seqlen/max:278902 - global_seqlen/minmax_diff:61799 - global_seqlen/balanced_min:257383 - global_seqlen/balanced_max:257384 - global_seqlen/mean:257383.46875 - actor/entropy:0.012583615258336067 - actor/ppl:1.0130956172943115 - actor/pg_loss:0.013296685297973454 - actor/pg_clipfrac:0.0008208550525523606 - actor/ppo_kl:0.0003026729320367849 - actor/pg_clipfrac_lower:0.0 - actor/grad_norm:0.2382375430315733 - perf/mfu/actor:0.42477647899680865 - perf/max_memory_allocated_gb:65.41025400161743 - perf/max_memory_reserved_gb:123.412109375 - perf/cpu_memory_used_gb:83.95471572875977 - actor/lr:1e-06 - critic/score/mean:0.6841534376144409 - critic/score/max:1.0 - critic/score/min:-1.7744140625 - critic/rewards/mean:0.6841534376144409 - critic/rewards/max:1.0 - critic/rewards/min:-1.7744140625 - critic/advantages/mean:0.00044002055074088275 - critic/advantages/max:3.7499923706054688 - critic/advantages/min:-3.7499938011169434 - critic/returns/mean:0.00044002055074088275 - critic/returns/max:3.7499923706054688 - critic/returns/min:-3.7499938011169434 - response_length/mean:789.5838623046875 - response_length/max:1826.0 - response_length/min:197.0 - response_length/clip_ratio:0.0 - prompt_length/mean:215.8203125 - prompt_length/max:476.0 - prompt_length/min:120.0 - prompt_length/clip_ratio:0.0 - timing_s/generate_sequences:114.31060791015625 - timing_s/reshard:5.194070816040039 - timing_s/gen:1392.4678220376372 - timing_s/reward:113.19178890809417 - timing_s/step:1629.9701001010835 - timing_s/old_log_prob:24.87957240641117 - timing_s/adv:0.21572670340538025 - timing_s/update_actor:92.1782152093947 - timing_per_token_ms/update_actor:0.011191741409358033 - timing_per_token_ms/gen:0.2152766669852944 - timing_per_token_ms/adv:2.6192278448023413e-05 - perf/total_num_tokens:8236271 - perf/time_per_step:1629.9701001010835 - perf/throughput:157.90686512227325 - train/num_gen_batches:10
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 760it [43:39:52, 179.40s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=49 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=1. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 761it [43:42:30, 173.01s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=107 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=2. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 762it [43:45:01, 166.50s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=150 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=3. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 763it [43:47:28, 160.36s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=199 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=4. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 764it [43:49:57, 157.11s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=245 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=5. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 765it [43:52:28, 155.34s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=301 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=6. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 766it [43:54:59, 154.03s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=344 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=7. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 767it [43:57:32, 153.73s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=407 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=8. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 768it [44:00:08, 154.48s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=468 < prompt_bsz=512
+[36m(TaskRunner pid=4200)[0m num_gen_batches=9. Keep generating...
+[36m(TaskRunner pid=4200)[0m 
+Training Progress: 768it [44:02:38, 206.46s/it]
+[36m(TaskRunner pid=4200)[0m num_prompt_in_batch=510 < prompt_bsz=512
+Error executing job with overrides: ['majob=7b', 'actor_rollout_ref.actor.NSR=false', 'actor_rollout_ref.rollout.max_num_batched_tokens=10240', 'trainer.nnodes=4', 'trainer.n_gpus_per_node=8']
+Traceback (most recent call last):
+  File "/home/ma-user/modelarts/user-job-dir/NSR/NSR-baseline/recipe/dapo/main_dapo.py", line 33, in main
+    run_ppo(config)
+  File "/home/ma-user/modelarts/user-job-dir/NSR/NSR-baseline/recipe/dapo/main_dapo.py", line 60, in run_ppo
+    ray.get(runner.run.remote(config))
+  File "/home/ma-user/anaconda3/envs/nsr/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 21, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ma-user/anaconda3/envs/nsr/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 103, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ma-user/anaconda3/envs/nsr/lib/python3.11/site-packages/ray/_private/worker.py", line 2771, in get
+    values, debugger_breakpoint = worker.get_objects(object_refs, timeout=timeout)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ma-user/anaconda3/envs/nsr/lib/python3.11/site-packages/ray/_private/worker.py", line 919, in get_objects
+    raise value.as_instanceof_cause()
+ray.exceptions.RayTaskError(ValueError): [36mray::TaskRunner.run()[39m (pid=4200, ip=192.168.145.132, actor_id=44a72fed00f004137b6bb39d01000000, repr=<main_dapo.TaskRunner object at 0x7f08dd4bb5d0>)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ma-user/modelarts/user-job-dir/NSR/NSR-baseline/recipe/dapo/main_dapo.py", line 170, in run
+    trainer.fit()
+  File "/home/ma-user/modelarts/user-job-dir/NSR/NSR-baseline/recipe/dapo/dapo_ray_trainer.py", line 245, in fit
+    raise ValueError(
+ValueError: num_gen_batches=10 >= max_num_gen_batches=10. Generated too many. Please check if your data are too difficult. You could also try set max_num_gen_batches=0 to enable endless trials.
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.
