@@ -36,6 +36,10 @@ actor_rollout_ref:
       vllm:
         hf_overrides: ${actor_rollout_ref.model.override_config}
 
+algorithm:
+  filter_groups:
+    max_num_gen_batches: 20
+
 reward_model:
   overlong_buffer:
     len: 1024
